@@ -341,7 +341,7 @@ local MultiFarm = {
 	Dropdown = nil,
 	LastValuesKey = "",
 	HeartbeatInterval = 0.2,
-	StaleMs = 2500,
+	StaleMs = 6000,
 	LootBusy = false,
 	RewardBusy = false,
 	LeaderDeliveryLatched = false,
@@ -350,7 +350,9 @@ local MultiFarm = {
 	PendingRewardCheck = false,
 	PendingRewardName = "",
 	PendingRewardPosition = nil,
-	CatchUpRequested = false
+	CatchUpRequested = false,
+	ResumeFarmUntil = 0,
+	LastLeaderSeenAt = 0
 }
 
 
@@ -586,15 +588,39 @@ function MultiFarm.getPlayerNames()
 		"None"
 	}
 
+	local seen = {
+		None = true
+	}
+
 	for playerName in pairs(
 		MultiFarm.Peers
 	) do
 
+		if not seen[playerName] then
+
+			seen[playerName] =
+				true
+
+			table.insert(
+				names,
+				playerName
+			)
+		end
+	end
+
+
+	if MultiFarm.Target ~= "None"
+		and MultiFarm.Target ~= ""
+		and not seen[
+			MultiFarm.Target
+		] then
+
 		table.insert(
 			names,
-			playerName
+			MultiFarm.Target
 		)
 	end
+
 
 	table.sort(
 		names,
@@ -711,6 +737,9 @@ function MultiFarm.getLeader()
 		return nil
 	end
 
+	MultiFarm.LastLeaderSeenAt =
+		os.clock()
+
 	local updated =
 		tonumber(
 			peer.updated
@@ -740,6 +769,15 @@ function MultiFarm.resolveBoss(defaultBoss)
 		MultiFarm.getLeader()
 
 	if not leader then
+
+		if MultiFarm.LastLeaderSeenAt > 0
+			and os.clock()
+				- MultiFarm.LastLeaderSeenAt
+				<= 8 then
+
+			return nil, true
+		end
+
 		return nil, true
 	end
 
@@ -769,6 +807,392 @@ function MultiFarm.resolveBoss(defaultBoss)
 	end
 
 	return bossName, false
+end
+
+
+function MultiFarm.loadAutoloadConfig(saveManager, fluent)
+	if not saveManager then
+		return false
+	end
+
+	local folder =
+		tostring(
+			saveManager.Folder
+			or "Slayer2Sigma/config"
+		)
+
+	local autoloadPath =
+		folder
+		.. "/settings/autoload.txt"
+
+	if typeof(isfile) ~= "function"
+		or typeof(readfile) ~= "function" then
+
+		pcall(function()
+			saveManager:LoadAutoloadConfig()
+		end)
+
+		return false
+	end
+
+
+	local existsOk,
+		autoloadExists =
+		pcall(
+			isfile,
+			autoloadPath
+		)
+
+	if not existsOk
+		or not autoloadExists then
+
+		return false
+	end
+
+
+	local nameOk,
+		configName =
+		pcall(
+			readfile,
+			autoloadPath
+		)
+
+	if not nameOk
+		or type(configName) ~= "string" then
+
+		return false
+	end
+
+
+	configName =
+		configName
+			:gsub("^%s+", "")
+			:gsub("%s+$", "")
+
+	if configName == "" then
+		return false
+	end
+
+
+	local configPath =
+		folder
+		.. "/settings/"
+		.. configName
+		.. ".json"
+
+
+	local configExistsOk,
+		configExists =
+		pcall(
+			isfile,
+			configPath
+		)
+
+	if not configExistsOk
+		or not configExists then
+
+		return false
+	end
+
+
+	local contentOk,
+		content =
+		pcall(
+			readfile,
+			configPath
+		)
+
+	if not contentOk
+		or type(content) ~= "string" then
+
+		return false
+	end
+
+
+	local decodeOk,
+		decoded =
+		pcall(function()
+
+			return game:GetService(
+				"HttpService"
+			):JSONDecode(
+				content
+			)
+		end)
+
+	if not decodeOk
+		or type(decoded) ~= "table"
+		or type(decoded.objects) ~= "table" then
+
+		return false
+	end
+
+
+	local savedFarmWith =
+		nil
+
+	local savedBossSelect =
+		nil
+
+
+	for _, object in ipairs(
+		decoded.objects
+	) do
+
+		if type(object) == "table" then
+
+			if object.idx == "FarmWith" then
+
+				savedFarmWith =
+					object.value
+
+			elseif object.idx == "BossSelect" then
+
+				savedBossSelect =
+					object.value
+			end
+		end
+	end
+
+
+	if MultiFarm.Dropdown
+		and savedFarmWith ~= nil then
+
+		local target =
+			tostring(
+				savedFarmWith
+			)
+
+		local values =
+			MultiFarm.getPlayerNames()
+
+		local found =
+			false
+
+		for _, value in ipairs(values) do
+			if tostring(value) == target then
+				found =
+					true
+
+				break
+			end
+		end
+
+		if not found
+			and target ~= ""
+			and target ~= "None" then
+
+			table.insert(
+				values,
+				target
+			)
+		end
+
+		pcall(function()
+			MultiFarm.Dropdown:SetValues(
+				values
+			)
+		end)
+	end
+
+
+	if bossDropdown
+		and type(savedBossSelect) == "table" then
+
+		local values =
+			getActiveNpcNames()
+
+		local foundValues = {}
+
+		for _, value in ipairs(values) do
+			foundValues[
+				tostring(value)
+			] = true
+		end
+
+
+		for bossName, selected in pairs(
+			savedBossSelect
+		) do
+
+			if selected
+				and type(bossName) == "string"
+				and not foundValues[
+					bossName
+				] then
+
+				foundValues[
+					bossName
+				] = true
+
+				table.insert(
+					values,
+					bossName
+				)
+			end
+		end
+
+
+		table.sort(
+			values,
+			function(a, b)
+				return string.lower(
+					tostring(a)
+				)
+					< string.lower(
+						tostring(b)
+					)
+			end
+		)
+
+
+		pcall(function()
+			bossDropdown:SetValues(
+				values
+			)
+		end)
+	end
+
+
+	local loaded,
+		loadResult,
+		loadError =
+		pcall(function()
+
+			local success,
+				err =
+				saveManager:Load(
+					configName
+				)
+
+			return success,
+				err
+		end)
+
+
+	if not loaded
+		or not loadResult then
+
+		if fluent then
+
+			pcall(function()
+
+				fluent:Notify({
+					Title = "Interface",
+					Content = "Config loader",
+					SubContent =
+						"Failed to auto load "
+						.. tostring(
+							configName
+						)
+						.. ": "
+						.. tostring(
+							loadError
+							or "unknown error"
+						),
+					Duration = 7
+				})
+
+			end)
+		end
+
+		return false
+	end
+
+
+	task.delay(
+		0.35,
+		function()
+
+			if not Runtime.alive then
+				return
+			end
+
+
+			if MultiFarm.Dropdown
+				and savedFarmWith ~= nil then
+
+				local target =
+					tostring(
+						savedFarmWith
+					)
+
+				local values =
+					MultiFarm.getPlayerNames()
+
+				local found =
+					false
+
+				for _, value in ipairs(values) do
+					if tostring(value)
+						== target then
+
+						found =
+							true
+
+						break
+					end
+				end
+
+
+				if not found
+					and target ~= ""
+					and target ~= "None" then
+
+					table.insert(
+						values,
+						target
+					)
+				end
+
+
+				pcall(function()
+					MultiFarm.Dropdown:SetValues(
+						values
+					)
+
+					MultiFarm.Dropdown:SetValue(
+						savedFarmWith
+					)
+				end)
+			end
+
+
+			if bossDropdown
+				and type(savedBossSelect)
+					== "table" then
+
+				pcall(function()
+					bossDropdown:SetValue(
+						savedBossSelect
+					)
+				end)
+			end
+
+		end
+	)
+
+
+	if fluent then
+
+		pcall(function()
+
+			fluent:Notify({
+				Title = "Interface",
+				Content = "Config loader",
+				SubContent =
+					string.format(
+						"Auto loaded config %q",
+						configName
+					),
+				Duration = 5
+			})
+
+		end)
+	end
+
+
+	return true
 end
 
 
@@ -1221,6 +1645,12 @@ Runtime.cleanup = function()
 
 	MultiFarm.CatchUpRequested =
 		false
+
+	MultiFarm.ResumeFarmUntil =
+		0
+
+	MultiFarm.LastLeaderSeenAt =
+		0
 
 	MultiFarm.LeaderDeliveryLatched =
 		false
@@ -2268,7 +2698,9 @@ function Delivery.runAutoDeliveryQuest()
 		or not autoDeliveryEnabled
 		or deliveryBusy
 		or MultiFarm.RewardBusy
-		or MultiFarm.LootBusy then
+		or MultiFarm.LootBusy
+		or os.clock()
+			< MultiFarm.ResumeFarmUntil then
 
 		return false
 	end
@@ -2474,6 +2906,10 @@ function Delivery.runAutoDeliveryQuest()
 	deliveryBusy =
 		false
 
+	MultiFarm.ResumeFarmUntil =
+		os.clock()
+		+ 1.5
+
 
 	if MultiFarm.isFollower() then
 
@@ -2500,7 +2936,7 @@ function Delivery.runAutoDeliveryQuest()
 
 				MultiFarm.setStatus(
 					"Waiting Sync",
-					""
+					MultiFarm.Boss
 				)
 			end
 
@@ -2508,7 +2944,7 @@ function Delivery.runAutoDeliveryQuest()
 
 			MultiFarm.setStatus(
 				"Waiting Sync",
-				""
+				MultiFarm.Boss
 			)
 		end
 
@@ -2516,7 +2952,7 @@ function Delivery.runAutoDeliveryQuest()
 
 		MultiFarm.setStatus(
 			"Resuming",
-			""
+			MultiFarm.ActiveBossName
 		)
 
 	else
@@ -6668,7 +7104,20 @@ local function initUI()
 		end)
 
 
-		SaveManager:LoadAutoloadConfig()
+		task.defer(function()
+
+			if not Runtime.alive then
+				return
+			end
+
+			task.wait(0.15)
+
+			MultiFarm.loadAutoloadConfig(
+				SaveManager,
+				Fluent
+			)
+
+		end)
 	end)
 
 	if not ok then
@@ -6722,6 +7171,14 @@ task.spawn(function()
 
 		if MultiFarm.RewardBusy
 			or MultiFarm.LootBusy then
+
+			task.wait(0.05)
+			continue
+		end
+
+
+		if os.clock()
+			< MultiFarm.ResumeFarmUntil then
 
 			task.wait(0.05)
 			continue
@@ -6936,6 +7393,34 @@ task.spawn(function()
 		local leader =
 			MultiFarm.getLeader()
 
+		if MultiFarm.CatchUpRequested
+			and leader then
+
+			local leaderState =
+				tostring(
+					leader.state or ""
+				)
+
+			local leaderBoss =
+				tostring(
+					leader.boss or ""
+				)
+
+			if leaderBoss ~= ""
+				and leaderState ~= "Delivery"
+				and leaderState ~= "Open Chest"
+				and leaderState ~= "Picking Loot"
+				and leaderState ~= "Respawning"
+				and leaderState ~= "Idle" then
+
+				syncedBoss =
+					leaderBoss
+
+				waitForLeader =
+					false
+			end
+		end
+
 		if leader then
 
 			local leaderState =
@@ -6960,7 +7445,7 @@ task.spawn(function()
 
 			MultiFarm.setStatus(
 				"Waiting Sync",
-				""
+				MultiFarm.Boss
 			)
 
 			task.wait(0.10)
