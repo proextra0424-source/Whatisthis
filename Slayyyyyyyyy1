@@ -341,6 +341,7 @@ local MultiFarm = {
 	HeartbeatInterval = 0.5,
 	StaleMs = 4000,
 	LootBusy = false,
+	RewardBusy = false,
 	LeaderDeliveryLatched = false
 }
 
@@ -1196,6 +1197,9 @@ Runtime.cleanup = function()
 	setAntiAfk(false)
 
 	MultiFarm.LootBusy =
+		false
+
+	MultiFarm.RewardBusy =
 		false
 
 	MultiFarm.LeaderDeliveryLatched =
@@ -2203,7 +2207,9 @@ end
 function Delivery.runAutoDeliveryQuest()
 	if not Runtime.alive
 		or not autoDeliveryEnabled
-		or deliveryBusy then
+		or deliveryBusy
+		or MultiFarm.RewardBusy
+		or MultiFarm.LootBusy then
 
 		return false
 	end
@@ -4550,6 +4556,9 @@ function MultiFarm.collectFollowerLoot(waitTime)
 	MultiFarm.LootBusy =
 		true
 
+	MultiFarm.RewardBusy =
+		true
+
 	local timeoutAt =
 		os.clock()
 		+ (
@@ -4611,6 +4620,9 @@ function MultiFarm.collectFollowerLoot(waitTime)
 	end
 
 	MultiFarm.LootBusy =
+		false
+
+	MultiFarm.RewardBusy =
 		false
 
 	return hasLoot
@@ -5206,9 +5218,18 @@ local function processBoss(bossName)
 			)
 
 		if bossPosition then
-			collectNearbyWorldEventChest(
-				bossPosition
-			)
+
+			MultiFarm.RewardBusy =
+				true
+
+			pcall(function()
+				collectNearbyWorldEventChest(
+					bossPosition
+				)
+			end)
+
+			MultiFarm.RewardBusy =
+				false
 
 			boss =
 				getLiveBoss(
@@ -5233,10 +5254,23 @@ local function processBoss(bossName)
 			end
 
 
-			local collectedChest =
-				collectNearbyWorldEventChest(
+			MultiFarm.RewardBusy =
+				true
+
+			local chestOk,
+				collectedChest =
+				pcall(
+					collectNearbyWorldEventChest,
 					center
 				)
+
+			MultiFarm.RewardBusy =
+				false
+
+			if not chestOk then
+				collectedChest =
+					false
+			end
 
 
 			if collectedChest
@@ -5374,7 +5408,29 @@ local function processBoss(bossName)
 	end
 
 	if result == "boss_dead" then
-		handleBossRewards(deathPosition)
+
+		MultiFarm.RewardBusy =
+			true
+
+		local rewardOk,
+			rewardError =
+			pcall(
+				handleBossRewards,
+				deathPosition
+			)
+
+		MultiFarm.RewardBusy =
+			false
+
+		if not rewardOk then
+			warn(
+				"[Boss Reward] "
+				.. tostring(
+					rewardError
+				)
+			)
+		end
+
 		return "next"
 	end
 
@@ -6476,6 +6532,14 @@ task.spawn(function()
 
 
 		if deliveryBusy then
+			task.wait(0.05)
+			continue
+		end
+
+
+		if MultiFarm.RewardBusy
+			or MultiFarm.LootBusy then
+
 			task.wait(0.05)
 			continue
 		end
