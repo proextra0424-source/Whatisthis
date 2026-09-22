@@ -231,6 +231,8 @@ local DELIVERY_STREAM_TIMEOUT = 8
 local DELIVERY_STREAM_SETTLE_DELAY = 0.15
 local DELIVERY_REMOTE_RETRY_INTERVAL = 0.20
 local DELIVERY_PROGRESS_TEXT = "Deliver Niko's Supply Box  1/2"
+local DELIVERY_STEP_TIMEOUT = 5
+local DELIVERY_RECOVERY_TIMEOUT = 30
 
 local WEAPON_MASTERY_DURATION = 2
 local WEAPON_MASTERY_EQUIP_DELAY = 0.08
@@ -338,11 +340,17 @@ local MultiFarm = {
 	Peers = {},
 	Dropdown = nil,
 	LastValuesKey = "",
-	HeartbeatInterval = 0.5,
-	StaleMs = 4000,
+	HeartbeatInterval = 0.2,
+	StaleMs = 2500,
 	LootBusy = false,
 	RewardBusy = false,
-	LeaderDeliveryLatched = false
+	LeaderDeliveryLatched = false,
+	ActiveBossName = "",
+	ActiveBossPosition = nil,
+	PendingRewardCheck = false,
+	PendingRewardName = "",
+	PendingRewardPosition = nil,
+	CatchUpRequested = false
 }
 
 
@@ -1202,6 +1210,18 @@ Runtime.cleanup = function()
 	MultiFarm.RewardBusy =
 		false
 
+	MultiFarm.PendingRewardCheck =
+		false
+
+	MultiFarm.PendingRewardName =
+		""
+
+	MultiFarm.PendingRewardPosition =
+		nil
+
+	MultiFarm.CatchUpRequested =
+		false
+
 	MultiFarm.LeaderDeliveryLatched =
 		false
 
@@ -1882,6 +1902,30 @@ function Delivery.followNikoClose(niko)
 end
 
 
+function Delivery.cleanupMovement()
+	destroyFollow()
+
+	local root =
+		getCharacterRoot()
+
+	if root then
+		root.AssemblyLinearVelocity =
+			Vector3.zero
+
+		root.AssemblyAngularVelocity =
+			Vector3.zero
+	end
+
+	local humanoid =
+		getCharacterHumanoid()
+
+	if humanoid then
+		humanoid.AutoRotate =
+			true
+	end
+end
+
+
 function Delivery.fireDeliveryRemote(...)
 	local args = {...}
 
@@ -2070,7 +2114,12 @@ end
 
 
 function Delivery.waitForDeliveryQuestAccepted()
-	while Delivery.deliveryCanContinue() do
+	local timeoutAt =
+		os.clock()
+		+ DELIVERY_STEP_TIMEOUT
+
+	while Delivery.deliveryCanContinue()
+		and os.clock() < timeoutAt do
 
 		local frame =
 			Delivery.getDeliveryQuestFrame()
@@ -2113,7 +2162,12 @@ end
 
 
 function Delivery.waitForShioriProgress()
-	while Delivery.deliveryCanContinue() do
+	local timeoutAt =
+		os.clock()
+		+ DELIVERY_STEP_TIMEOUT
+
+	while Delivery.deliveryCanContinue()
+		and os.clock() < timeoutAt do
 
 		local frame =
 			Delivery.getDeliveryQuestFrame()
@@ -2161,7 +2215,12 @@ end
 
 
 function Delivery.waitForDeliveryQuestFinished()
-	while Delivery.deliveryCanContinue() do
+	local timeoutAt =
+		os.clock()
+		+ DELIVERY_STEP_TIMEOUT
+
+	while Delivery.deliveryCanContinue()
+		and os.clock() < timeoutAt do
 
 		local frame =
 			Delivery.getDeliveryQuestFrame()
@@ -2218,6 +2277,20 @@ function Delivery.runAutoDeliveryQuest()
 		return false
 	end
 
+	if farmEnabled
+		and bossProcessBusy
+		and MultiFarm.ActiveBossName ~= "" then
+
+		MultiFarm.PendingRewardCheck =
+			true
+
+		MultiFarm.PendingRewardName =
+			MultiFarm.ActiveBossName
+
+		MultiFarm.PendingRewardPosition =
+			MultiFarm.ActiveBossPosition
+	end
+
 	deliveryBusy =
 		true
 
@@ -2226,75 +2299,147 @@ function Delivery.runAutoDeliveryQuest()
 		""
 	)
 
-	destroyFollow()
+	Delivery.cleanupMovement()
 
-	local waitBossUntil =
+	local recoveryDeadline =
 		os.clock()
-		+ 3
-
-	while Runtime.alive
-		and autoDeliveryEnabled
-		and bossProcessBusy
-		and os.clock() < waitBossUntil do
-
-		task.wait(0.03)
-	end
-
+		+ DELIVERY_RECOVERY_TIMEOUT
 
 	local success =
 		false
 
+	local hadQuest =
+		Delivery.getDeliveryQuestFrame()
+			~= nil
+
 	local ok =
 		pcall(function()
 
-			if not Delivery.deliveryCanContinue() then
-				return
-			end
+			while Delivery.deliveryCanContinue()
+				and os.clock()
+					< recoveryDeadline do
+
+				if Delivery.hasActiveCrowQuest() then
+					break
+				end
+
+				local questFrame =
+					Delivery.getDeliveryQuestFrame()
+
+				if not questFrame then
+
+					if hadQuest then
+
+						success =
+							true
+
+						break
+					end
 
 
-			local niko =
-				Delivery.getOrRenderNiko()
+					local niko =
+						Delivery.getOrRenderNiko()
 
-			if not niko then
-				return
-			end
-
-
-			if not Delivery.followNikoClose(
-				niko
-			) then
-
-				return
-			end
+					if not niko then
+						Delivery.cleanupMovement()
+						task.wait(0.10)
+						continue
+					end
 
 
-			local questFrame =
-				Delivery.getDeliveryQuestFrame()
+					if not Delivery.followNikoClose(
+						niko
+					) then
 
-			if not questFrame then
-
-				questFrame =
-					Delivery.waitForDeliveryQuestAccepted()
-			end
-
-
-			if not questFrame
-				or not Delivery.deliveryCanContinue() then
-
-				return
-			end
+						Delivery.cleanupMovement()
+						task.wait(0.10)
+						continue
+					end
 
 
-			destroyFollow()
+					local accepted =
+						Delivery.waitForDeliveryQuestAccepted()
+
+					Delivery.cleanupMovement()
 
 
-			if not Delivery.isDeliveryHalfComplete() then
+					if accepted then
+						hadQuest =
+							true
+					end
+
+
+					task.wait(0.05)
+					continue
+				end
+
+
+				hadQuest =
+					true
+
+
+				if Delivery.isDeliveryHalfComplete() then
+
+					if not Delivery.teleportDelivery(
+						DELIVERY_RENDER_NIKO
+					) then
+
+						Delivery.cleanupMovement()
+						task.wait(0.10)
+						continue
+					end
+
+
+					local niko =
+						Delivery.waitForNiko()
+
+					if not niko then
+						Delivery.cleanupMovement()
+						task.wait(0.10)
+						continue
+					end
+
+
+					if not Delivery.followNikoClose(
+						niko
+					) then
+
+						Delivery.cleanupMovement()
+						task.wait(0.10)
+						continue
+					end
+
+
+					local finished =
+						Delivery.waitForDeliveryQuestFinished()
+
+					Delivery.cleanupMovement()
+
+
+					if finished
+						or not Delivery.getDeliveryQuestFrame() then
+
+						success =
+							true
+
+						break
+					end
+
+
+					task.wait(0.05)
+					continue
+				end
+
+
+				Delivery.cleanupMovement()
+
 
 				if not Delivery.teleportDelivery(
 					DELIVERY_SHIORI_POSITION
 				) then
 
-					return
+					task.wait(0.10)
+					continue
 				end
 
 
@@ -2311,69 +2456,68 @@ function Delivery.runAutoDeliveryQuest()
 
 
 				if not Delivery.deliveryCanContinue() then
-					return
+					break
 				end
 
 
-				if not Delivery.waitForShioriProgress() then
-					return
-				end
+				Delivery.waitForShioriProgress()
+
+				Delivery.cleanupMovement()
+
+				task.wait(0.05)
 			end
-
-
-			if not Delivery.deliveryCanContinue() then
-				return
-			end
-
-
-			if not Delivery.teleportDelivery(
-				DELIVERY_RENDER_NIKO
-			) then
-
-				return
-			end
-
-
-			niko =
-				Delivery.waitForNiko()
-
-			if not niko then
-				return
-			end
-
-
-			if not Delivery.followNikoClose(
-				niko
-			) then
-
-				return
-			end
-
-
-			if not Delivery.waitForDeliveryQuestFinished() then
-				return
-			end
-
-
-			success =
-				Delivery.getDeliveryQuestFrame()
-				== nil
 		end)
 
 
-	destroyFollow()
+	Delivery.cleanupMovement()
 
 	deliveryBusy =
 		false
 
-	if farmEnabled then
+
+	if MultiFarm.isFollower() then
+
+		local leader =
+			MultiFarm.getLeader()
+
+		if leader then
+
+			local leaderBoss =
+				tostring(
+					leader.boss or ""
+				)
+
+			if leaderBoss ~= "" then
+
+				MultiFarm.CatchUpRequested =
+					true
+
+				MultiFarm.setStatus(
+					"Catching Up",
+					leaderBoss
+				)
+			else
+
+				MultiFarm.setStatus(
+					"Waiting Sync",
+					""
+				)
+			end
+
+		else
+
+			MultiFarm.setStatus(
+				"Waiting Sync",
+				""
+			)
+		end
+
+	elseif farmEnabled then
 
 		MultiFarm.setStatus(
 			"Resuming",
 			""
 		)
-
-		setEquippedToOne()
 
 	else
 
@@ -2381,6 +2525,11 @@ function Delivery.runAutoDeliveryQuest()
 			"Idle",
 			""
 		)
+	end
+
+
+	if farmEnabled then
+		setEquippedToOne()
 	end
 
 
@@ -2404,8 +2553,11 @@ function Delivery.setAutoDeliveryEnabled(state)
 	else
 
 		if deliveryBusy then
-			destroyFollow()
+			Delivery.cleanupMovement()
 		end
+
+		MultiFarm.CatchUpRequested =
+			false
 	end
 end
 
@@ -3504,6 +3656,12 @@ local function fightBoss(bossName, boss)
 	local lastBossPosition =
 		bossRoot.Position
 
+	MultiFarm.ActiveBossName =
+		bossName
+
+	MultiFarm.ActiveBossPosition =
+		lastBossPosition
+
 	local lastToolRefresh =
 		0
 
@@ -3601,6 +3759,12 @@ local function fightBoss(bossName, boss)
 
 		lastBossPosition =
 			bossRoot.Position
+
+		MultiFarm.ActiveBossName =
+			bossName
+
+		MultiFarm.ActiveBossPosition =
+			lastBossPosition
 
 
 		local desiredFollowPosition =
@@ -5389,6 +5553,19 @@ local function processBoss(bossName)
 		bossName
 	)
 
+	MultiFarm.ActiveBossName =
+		bossName
+
+	local activeBossRoot =
+		getBossRoot(
+			boss
+		)
+
+	if activeBossRoot then
+		MultiFarm.ActiveBossPosition =
+			activeBossRoot.Position
+	end
+
 	local result, deathPosition =
 		fightBoss(
 			bossName,
@@ -5431,8 +5608,14 @@ local function processBoss(bossName)
 			)
 		end
 
+		MultiFarm.ActiveBossName =
+			""
+
 		return "next"
 	end
+
+	MultiFarm.ActiveBossName =
+		""
 
 	return "next"
 end
@@ -6656,6 +6839,53 @@ task.spawn(function()
 			continue
 		end
 
+
+		if MultiFarm.PendingRewardCheck
+			and farmEnabled then
+
+			local pendingName =
+				MultiFarm.PendingRewardName
+
+			local pendingPosition =
+				MultiFarm.PendingRewardPosition
+
+			local livePendingBoss =
+				pendingName ~= ""
+				and getLiveBoss(
+					pendingName
+				)
+				or nil
+
+			if not livePendingBoss then
+
+				MultiFarm.RewardBusy =
+					true
+
+				pcall(
+					handleBossRewards,
+					pendingPosition
+				)
+
+				MultiFarm.RewardBusy =
+					false
+			end
+
+
+			MultiFarm.PendingRewardCheck =
+				false
+
+			MultiFarm.PendingRewardName =
+				""
+
+			MultiFarm.PendingRewardPosition =
+				nil
+
+
+			task.wait(0.03)
+			continue
+		end
+
+
 		if not farmEnabled then
 			task.wait(0.1)
 			continue
@@ -6740,6 +6970,17 @@ task.spawn(function()
 		bossName =
 			syncedBoss
 			or bossName
+
+		if MultiFarm.CatchUpRequested then
+
+			MultiFarm.CatchUpRequested =
+				false
+
+			MultiFarm.setStatus(
+				"Catching Up",
+				bossName
+			)
+		end
 
 
 		bossProcessBusy =
