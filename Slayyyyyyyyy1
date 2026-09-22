@@ -1464,7 +1464,9 @@ local function createFollowConstraints()
 end
 
 
-local Delivery = {}
+local Delivery = {
+	FollowSerial = 0
+}
 
 
 function Delivery.waitForDeliveryCharacter()
@@ -1765,6 +1767,47 @@ function Delivery.followNikoClose(niko)
 		return false
 	end
 
+	Delivery.FollowSerial += 1
+
+	local followSerial =
+		Delivery.FollowSerial
+
+	local activeFollow =
+		followPosition
+
+	task.spawn(function()
+
+		while Runtime.alive
+			and autoDeliveryEnabled
+			and deliveryBusy
+			and Delivery.FollowSerial
+				== followSerial
+			and activeFollow
+			and activeFollow.Parent
+			and niko
+			and niko.Parent do
+
+			local movingNpcRoot =
+				Delivery.getNpcFollowRoot(
+					niko
+				)
+
+			if not movingNpcRoot then
+				break
+			end
+
+			activeFollow.Position =
+				movingNpcRoot.Position
+				+ Vector3.new(
+					0,
+					DELIVERY_FOLLOW_HEIGHT,
+					0
+				)
+
+			task.wait(0.03)
+		end
+	end)
+
 	local timeoutAt =
 		os.clock()
 		+ DELIVERY_FOLLOW_TIMEOUT
@@ -1772,6 +1815,8 @@ function Delivery.followNikoClose(niko)
 	while Runtime.alive
 		and autoDeliveryEnabled
 		and deliveryBusy
+		and Delivery.FollowSerial
+			== followSerial
 		and os.clock() < timeoutAt do
 
 		if not isPlayerAlive() then
@@ -1802,8 +1847,10 @@ function Delivery.followNikoClose(niko)
 				0
 			)
 
-		if followPosition then
-			followPosition.Position =
+		if activeFollow
+			and activeFollow.Parent then
+
+			activeFollow.Position =
 				target
 		end
 
@@ -1818,14 +1865,16 @@ function Delivery.followNikoClose(niko)
 				<= DELIVERY_FOLLOW_DISTANCE then
 
 			task.wait(0.12)
-			return true
+
+			return activeFollow ~= nil
+				and activeFollow.Parent ~= nil
 		end
 
 		task.wait(0.03)
 	end
 
-	return followPosition ~= nil
-		and followPosition.Parent ~= nil
+	return activeFollow ~= nil
+		and activeFollow.Parent ~= nil
 end
 
 
