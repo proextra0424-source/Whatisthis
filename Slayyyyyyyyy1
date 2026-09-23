@@ -167,6 +167,7 @@ local DEFAULT_BOSS_NAMES = {
 	"Akazo",
 	"Datai",
 	"Domae",
+	"Fujiko",
 	"Gyutai",
 	"Nezura",
 	"Reaper"
@@ -350,6 +351,9 @@ local MultiFarm = {
 	RespawnBossPosition = nil,
 	LootNoclip = false,
 	LootNoclipParts = {},
+	NotifierEnabled = true,
+	NotifyLastKey = "",
+	NotifyLastAt = 0,
 	Online = {
 		Enabled = false,
 		Base = "https://slayer2-sync-temp.boomzil526.workers.dev",
@@ -360,7 +364,9 @@ local MultiFarm = {
 		LastRevision = 0,
 		LastPull = 0,
 		PollInterval = 5,
-		FastPollInterval = 1,
+		FastPollInterval = 0.5,
+		CriticalPollInterval = 0.25,
+		CriticalUntil = 0,
 		Busy = false,
 		LastPushSignature = "",
 		StatusFile = "slayer2_online_sync_status.txt"
@@ -370,6 +376,54 @@ local MultiFarm = {
 
 function MultiFarm.nowMs()
 	return DateTime.now().UnixTimestampMillis
+end
+
+
+function MultiFarm.notify(key, content)
+	if not MultiFarm.NotifierEnabled then
+		return
+	end
+
+	local fluent =
+		Runtime.fluent
+
+	if not fluent then
+		return
+	end
+
+	key =
+		tostring(
+			key or content or ""
+		)
+
+	local now =
+		os.clock()
+
+	if MultiFarm.NotifyLastKey == key
+		and now - MultiFarm.NotifyLastAt
+			< 0.8 then
+
+		return
+	end
+
+	MultiFarm.NotifyLastKey =
+		key
+
+	MultiFarm.NotifyLastAt =
+		now
+
+	pcall(function()
+
+		fluent:Notify({
+			Title = "Boss Farm",
+			Content =
+				tostring(
+					content or ""
+				),
+			Duration = 2
+		})
+
+	end)
 end
 
 
@@ -749,7 +803,9 @@ function MultiFarm.Online.pull()
 						tostring(
 							member.event
 							or ""
-						)
+						),
+					position =
+						member.position
 				}
 			end
 		end
@@ -780,6 +836,58 @@ function MultiFarm.Online.pull()
 	)
 
 	return true
+end
+
+
+function MultiFarm.Online.getRemoteRewardPosition(bossName)
+	bossName =
+		tostring(
+			bossName
+			or MultiFarm.Boss
+			or ""
+		)
+
+	for _, peer in pairs(
+		MultiFarm.Online.Peers
+	) do
+
+		if tostring(
+			peer.boss
+			or ""
+		) == bossName then
+
+			local eventName =
+				tostring(
+					peer.event
+					or ""
+				)
+
+			local state =
+				tostring(
+					peer.state
+					or ""
+				)
+
+			if eventName == "ChestOpened"
+				or eventName == "LootPending"
+				or eventName == "BossDead"
+				or state == "Open Chest"
+				or state == "Picking Loot"
+				or state == "Waiting Loot" then
+
+				local position =
+					MultiFarm.Online.tableToPosition(
+						peer.position
+					)
+
+				if position then
+					return position
+				end
+			end
+		end
+	end
+
+	return nil
 end
 
 
@@ -827,6 +935,28 @@ function MultiFarm.Online.applyRespawnRecovery(bossName)
 end
 
 
+function MultiFarm.Online.startCritical(seconds)
+	if not MultiFarm.Online.Enabled then
+		return
+	end
+
+	seconds =
+		tonumber(seconds)
+		or 5
+
+	MultiFarm.Online.CriticalUntil =
+		math.max(
+			MultiFarm.Online.CriticalUntil
+				or 0,
+			os.clock() + seconds
+		)
+
+	task.spawn(function()
+		MultiFarm.Online.pull()
+	end)
+end
+
+
 function MultiFarm.Online.onStatus(state, bossName)
 	if not MultiFarm.Online.Enabled then
 		return
@@ -841,6 +971,10 @@ function MultiFarm.Online.onStatus(state, bossName)
 			MultiFarm.isFollower()
 				and "FollowerDied"
 				or "LeaderDied"
+
+		MultiFarm.Online.startCritical(
+			10
+		)
 	elseif state == "Open Chest" then
 		eventName = "ChestOpening"
 	elseif state == "Picking Loot" then
@@ -849,6 +983,10 @@ function MultiFarm.Online.onStatus(state, bossName)
 		eventName = "DeliveryStarted"
 	elseif state == "Waiting Sync" then
 		eventName = "WaitingSync"
+
+		MultiFarm.Online.startCritical(
+			5
+		)
 	elseif state == "Catching Up" then
 		eventName = "CatchingUp"
 	elseif state == "Resuming" then
@@ -892,6 +1030,12 @@ function MultiFarm.Online.setEnabled(value)
 		return
 	end
 
+	MultiFarm.Online.CriticalUntil =
+		os.clock() + 3
+
+	MultiFarm.scan()
+	MultiFarm.refreshDropdown()
+
 	task.spawn(function()
 
 		MultiFarm.Online.push(
@@ -903,6 +1047,8 @@ function MultiFarm.Online.setEnabled(value)
 		)
 
 		MultiFarm.Online.pull()
+		MultiFarm.scan()
+		MultiFarm.refreshDropdown()
 
 	end)
 end
@@ -1076,56 +1222,52 @@ end
 
 
 function MultiFarm.scan()
-	if not MultiFarm.ensureFolder() then
-		MultiFarm.Peers = {}
-		return
-	end
-
-	local ok, files =
-		pcall(
-			listfiles,
-			MultiFarm.Folder
-		)
-
-	if not ok
-		or type(files) ~= "table" then
-
-		MultiFarm.Peers = {}
-		return
-	end
-
 	local peers = {}
-	local now =
-		MultiFarm.nowMs()
 
-	for _, path in ipairs(files) do
+	if MultiFarm.ensureFolder() then
 
-		if string.match(
-			tostring(path),
-			"%.json$"
-		) then
+		local ok, files =
+			pcall(
+				listfiles,
+				MultiFarm.Folder
+			)
 
-			local data =
-				MultiFarm.read(
-					path
-				)
+		if ok
+			and type(files) == "table" then
 
-			if data
-				and tonumber(data.userid)
-					~= LocalPlayer.UserId
-				and tostring(data.jobId or "")
-					== tostring(game.JobId)
-				and tonumber(data.placeId)
-					== game.PlaceId
-				and type(data.player)
-					== "string"
-				and tonumber(data.updated)
-				and now
-					- tonumber(data.updated)
-					<= MultiFarm.StaleMs then
+			local now =
+				MultiFarm.nowMs()
 
-				peers[data.player] =
-					data
+			for _, path in ipairs(files) do
+
+				if string.match(
+					tostring(path),
+					"%.json$"
+				) then
+
+					local data =
+						MultiFarm.read(
+							path
+						)
+
+					if data
+						and tonumber(data.userid)
+							~= LocalPlayer.UserId
+						and tostring(data.jobId or "")
+							== tostring(game.JobId)
+						and tonumber(data.placeId)
+							== game.PlaceId
+						and type(data.player)
+							== "string"
+						and tonumber(data.updated)
+						and now
+							- tonumber(data.updated)
+							<= MultiFarm.StaleMs then
+
+						peers[data.player] =
+							data
+					end
+				end
 			end
 		end
 	end
@@ -1145,7 +1287,6 @@ function MultiFarm.scan()
 	MultiFarm.Peers =
 		peers
 end
-
 
 function MultiFarm.getPlayerNames()
 	local names = {
@@ -1172,6 +1313,25 @@ function MultiFarm.getPlayerNames()
 		end
 	end
 
+	if MultiFarm.Online.Enabled then
+
+		for _, player in ipairs(
+			Players:GetPlayers()
+		) do
+
+			if player ~= LocalPlayer
+				and not seen[player.Name] then
+
+				seen[player.Name] =
+					true
+
+				table.insert(
+					names,
+					player.Name
+				)
+			end
+		end
+	end
 
 	if MultiFarm.Target ~= "None"
 		and MultiFarm.Target ~= ""
@@ -1184,7 +1344,6 @@ function MultiFarm.getPlayerNames()
 			MultiFarm.Target
 		)
 	end
-
 
 	table.sort(
 		names,
@@ -1204,7 +1363,6 @@ function MultiFarm.getPlayerNames()
 
 	return names
 end
-
 
 function MultiFarm.refreshDropdown()
 	if not MultiFarm.Dropdown then
@@ -1279,6 +1437,10 @@ function MultiFarm.setTarget(value)
 	MultiFarm.write()
 
 	if MultiFarm.Online.Enabled then
+
+		MultiFarm.Online.startCritical(
+			3
+		)
 
 		task.spawn(function()
 
@@ -1869,6 +2031,7 @@ end
 
 local function getActiveNpcNames()
 	local names = {}
+	local seen = {}
 
 	for _, object in ipairs(
 		ActiveNpcs:GetChildren()
@@ -1877,11 +2040,56 @@ local function getActiveNpcNames()
 		if object:IsA("Folder")
 			or object:IsA("Model") then
 
-			table.insert(
-				names,
-				object.Name
-			)
+			if not seen[object.Name] then
+				seen[object.Name] =
+					true
+
+				table.insert(
+					names,
+					object.Name
+				)
+			end
 		end
+	end
+
+	local finalSelection =
+		workspace
+			:FindFirstChild("Humanoids")
+
+	finalSelection =
+		finalSelection
+		and finalSelection:FindFirstChild(
+			"Regions"
+		)
+
+	finalSelection =
+		finalSelection
+		and finalSelection:FindFirstChild(
+			"Final Selection Plains"
+		)
+
+	finalSelection =
+		finalSelection
+		and finalSelection:FindFirstChild(
+			"ActiveNpcs"
+		)
+
+	local fujiko =
+		finalSelection
+		and finalSelection:FindFirstChild(
+			"Fujiko"
+		)
+
+	if fujiko
+		and not seen.Fujiko then
+
+		seen.Fujiko =
+			true
+
+		table.insert(
+			names,
+			"Fujiko"
+		)
 	end
 
 	table.sort(
@@ -2756,7 +2964,45 @@ end
 
 
 local function getBossFolder(bossName)
-	return ActiveNpcs:FindFirstChild(bossName)
+	if bossName == "Fujiko" then
+
+		local humanoids =
+			workspace:FindFirstChild(
+				"Humanoids"
+			)
+
+		local regions =
+			humanoids
+			and humanoids:FindFirstChild(
+				"Regions"
+			)
+
+		local finalSelection =
+			regions
+			and regions:FindFirstChild(
+				"Final Selection Plains"
+			)
+
+		local activeNpcs =
+			finalSelection
+			and finalSelection:FindFirstChild(
+				"ActiveNpcs"
+			)
+
+		local fujiko =
+			activeNpcs
+			and activeNpcs:FindFirstChild(
+				"Fujiko"
+			)
+
+		if fujiko then
+			return fujiko
+		end
+	end
+
+	return ActiveNpcs:FindFirstChild(
+		bossName
+	)
 end
 
 local function getBossHumanoid(model)
@@ -2789,13 +3035,32 @@ local function getLiveBoss(bossName)
 		return nil
 	end
 
-	local boss = folder:FindFirstChild(bossName)
-	if not boss or not boss:IsA("Model") then
+	local boss =
+		folder:FindFirstChild(
+			bossName
+		)
+
+	if not boss
+		and folder:IsA("Model") then
+
+		boss =
+			folder
+	end
+
+	if not boss
+		or not boss:IsA("Model") then
+
 		return nil
 	end
 
-	local humanoid = getBossHumanoid(boss)
-	if not humanoid or humanoid.Health <= 0 then
+	local humanoid =
+		getBossHumanoid(
+			boss
+		)
+
+	if not humanoid
+		or humanoid.Health <= 0 then
+
 		return nil
 	end
 
@@ -2808,7 +3073,14 @@ local function getBossCenter(bossName)
 		return nil
 	end
 
-	local bossInfo = folder:FindFirstChild("BossInfo")
+	local bossInfo =
+		folder:FindFirstChild(
+			"BossInfo"
+		)
+		or folder:FindFirstChild(
+			"Bossinfo"
+		)
+
 	if not bossInfo then
 		return nil
 	end
@@ -4604,7 +4876,13 @@ local function fightBoss(bossName, boss)
 	local bossDiedConfirmed =
 		false
 
+	local bossWasEngaged =
+		false
+
 	local diedConnection =
+		nil
+
+	local healthConnection =
 		nil
 
 
@@ -4616,6 +4894,15 @@ local function fightBoss(bossName, boss)
 			end)
 
 			diedConnection = nil
+		end
+
+		if healthConnection then
+
+			pcall(function()
+				healthConnection:Disconnect()
+			end)
+
+			healthConnection = nil
 		end
 	end
 
@@ -4631,11 +4918,23 @@ local function fightBoss(bossName, boss)
 		end
 
 
+		bossWasEngaged =
+			true
+
 		if humanoid.Health <= 0 then
 			bossDiedConfirmed =
 				true
 		end
 
+		healthConnection =
+			humanoid.HealthChanged:Connect(function(health)
+
+				if health <= 0 then
+					bossDiedConfirmed =
+						true
+				end
+
+			end)
 
 		diedConnection =
 			humanoid.Died:Connect(function()
@@ -4659,6 +4958,13 @@ local function fightBoss(bossName, boss)
 	local function getUsableBoss(model)
 		if not model
 			or not model.Parent then
+
+			if bossWasEngaged
+				and model then
+
+				bossDiedConfirmed =
+					true
+			end
 
 			return nil, nil
 		end
@@ -4692,9 +4998,14 @@ local function fightBoss(bossName, boss)
 
 
 	local function reacquireBoss()
+		local grace =
+			bossWasEngaged
+				and 0.25
+				or BOSS_REACQUIRE_GRACE
+
 		local deadline =
 			os.clock()
-			+ BOSS_REACQUIRE_GRACE
+			+ grace
 
 
 		while Runtime.alive
@@ -5439,6 +5750,77 @@ local function getLootDropChildCount()
 end
 
 
+function MultiFarm.getNearestRawLootPromptPosition(origin, radius)
+	local lootFolder =
+		workspace:FindFirstChild(
+			"LootDrops"
+		)
+
+	if not lootFolder then
+		return nil
+	end
+
+	radius =
+		tonumber(radius)
+		or CHEST_SEARCH_RADIUS
+
+	local bestPosition =
+		nil
+
+	local bestDistance =
+		math.huge
+
+	for _, drop in ipairs(
+		lootFolder:GetChildren()
+	) do
+
+		local prompt =
+			drop:FindFirstChild(
+				"LootDropPrompt",
+				true
+			)
+
+		if prompt
+			and prompt:IsA(
+				"ProximityPrompt"
+			) then
+
+			local position =
+				getObjectPosition(
+					prompt.Parent
+				)
+				or getObjectPosition(
+					drop
+				)
+
+			if position then
+
+				local distance =
+					origin
+					and (
+						position
+						- origin
+					).Magnitude
+					or 0
+
+				if distance <= radius
+					and distance
+						< bestDistance then
+
+					bestDistance =
+						distance
+
+					bestPosition =
+						position
+				end
+			end
+		end
+	end
+
+	return bestPosition
+end
+
+
 local function waitForChestPrompt(chest)
 	local timeoutAt =
 		os.clock()
@@ -5487,17 +5869,49 @@ local function openWorldEventsChest(origin)
 		MultiFarm.Boss
 	)
 
+	MultiFarm.notify(
+		"doing:open_chest",
+		'Doing "Open Chest"'
+	)
+
+	local beforeLootCount =
+		getLootDropChildCount()
+
 	local prompt =
 		waitForChestPrompt(
 			chest
 		)
 
 	if not prompt then
+
+		if not chest.Parent
+			or getLootDropChildCount()
+				> beforeLootCount then
+
+			local externalOpenWaitUntil =
+				os.clock()
+				+ LOOT_FIRST_SPAWN_TIMEOUT
+
+			while Runtime.alive
+				and farmEnabled
+				and not deliveryBusy
+				and os.clock()
+					< externalOpenWaitUntil do
+
+				if getLootDropChildCount()
+					> beforeLootCount then
+
+					break
+				end
+
+				task.wait(0.03)
+			end
+
+			return true
+		end
+
 		return false
 	end
-
-	local beforeLootCount =
-		getLootDropChildCount()
 
 	local promptPosition =
 		getObjectPosition(
@@ -5967,6 +6381,11 @@ local function collectAllLoot()
 		MultiFarm.Boss
 	)
 
+	MultiFarm.notify(
+		"doing:picking_loot",
+		'Doing "Picking Loot"'
+	)
+
 	local emptySince = nil
 	local firstLootDeadline = os.clock() + LOOT_FIRST_SPAWN_TIMEOUT
 	local hasSeenLoot = false
@@ -6135,6 +6554,29 @@ local function handleBossRewards(deathPosition)
 		os.clock()
 		+ BOSS_REWARD_WAIT_TIMEOUT
 
+	local initialRawLootCount =
+		getLootDropChildCount()
+
+	local lootGraceExtended =
+		false
+
+	local followerPublishedChest =
+		false
+
+	local lastOnlinePull =
+		0
+
+	local lastRecoveryTeleport =
+		0
+
+	if MultiFarm.Online.Enabled then
+
+		MultiFarm.Online.startCritical(
+			BOSS_REWARD_WAIT_TIMEOUT
+				+ 2
+		)
+	end
+
 	if MultiFarm.isFollower() then
 
 		while Runtime.alive
@@ -6142,38 +6584,94 @@ local function handleBossRewards(deathPosition)
 			and not deliveryBusy
 			and os.clock() < timeoutAt do
 
-			if #getLootEntries() > 0 then
+			local entries =
+				getLootEntries()
+
+			if #entries > 0 then
+
+				if MultiFarm.Online.Enabled
+					and not followerPublishedChest then
+
+					followerPublishedChest =
+						true
+
+					local rewardPosition =
+						MultiFarm.getNearestRawLootPromptPosition(
+							deathPosition,
+							CHEST_SEARCH_RADIUS
+						)
+						or deathPosition
+						or MultiFarm.ActiveBossPosition
+
+					MultiFarm.Online.push(
+						"ChestOpened",
+						"Picking Loot",
+						MultiFarm.Boss,
+						rewardPosition,
+						true
+					)
+
+					MultiFarm.Online.startCritical(
+						5
+					)
+				end
 
 				collectAllLoot()
 
 				return
 			end
 
+			local rawLootCount =
+				getLootDropChildCount()
 
-			local leader =
-				MultiFarm.getLeader()
+			if rawLootCount
+				> initialRawLootCount then
 
-			if leader then
+				if not lootGraceExtended then
 
-				local leaderState =
-					tostring(
-						leader.state or ""
+					lootGraceExtended =
+						true
+
+					timeoutAt =
+						math.max(
+							timeoutAt,
+							os.clock()
+								+ BOSS_REWARD_WAIT_TIMEOUT
+						)
+				end
+
+				MultiFarm.setStatus(
+					"Waiting Loot",
+					MultiFarm.Boss
+				)
+
+				if MultiFarm.Online.Enabled
+					and not followerPublishedChest then
+
+					followerPublishedChest =
+						true
+
+					local rewardPosition =
+						MultiFarm.getNearestRawLootPromptPosition(
+							deathPosition,
+							CHEST_SEARCH_RADIUS
+						)
+						or deathPosition
+						or MultiFarm.ActiveBossPosition
+
+					MultiFarm.Online.push(
+						"ChestOpened",
+						"Waiting Loot",
+						MultiFarm.Boss,
+						rewardPosition,
+						true
 					)
 
-				if leaderState == "Open Chest"
-					or leaderState == "Picking Loot" then
-
-					MultiFarm.setStatus(
-						"Waiting Loot",
-						tostring(
-							leader.boss
-							or MultiFarm.Boss
-							or ""
-						)
+					MultiFarm.Online.startCritical(
+						5
 					)
 				end
 			end
-
 
 			task.wait(
 				CHEST_POLL_INTERVAL
@@ -6183,19 +6681,58 @@ local function handleBossRewards(deathPosition)
 		return
 	end
 
-
 	while Runtime.alive
 		and farmEnabled
 		and not deliveryBusy
 		and os.clock() < timeoutAt do
 
-		if #getLootEntries() > 0 then
+		local entries =
+			getLootEntries()
+
+		if #entries > 0 then
 
 			collectAllLoot()
 
 			return
 		end
 
+		local now =
+			os.clock()
+
+		if MultiFarm.Online.Enabled
+			and now - lastOnlinePull
+				>= 0.25 then
+
+			lastOnlinePull =
+				now
+
+			MultiFarm.Online.pull()
+		end
+
+		local rawLootCount =
+			getLootDropChildCount()
+
+		if rawLootCount
+			> initialRawLootCount then
+
+			if not lootGraceExtended then
+
+				lootGraceExtended =
+					true
+
+				timeoutAt =
+					math.max(
+						timeoutAt,
+						os.clock()
+							+ BOSS_REWARD_WAIT_TIMEOUT
+					)
+			end
+
+			MultiFarm.setStatus(
+				"Waiting Loot",
+				MultiFarm.Boss
+			)
+		end
 
 		local chest =
 			deathPosition
@@ -6213,19 +6750,85 @@ local function handleBossRewards(deathPosition)
 
 			if opened then
 
-				collectAllLoot()
+				lootGraceExtended =
+					true
 
-				return
+				timeoutAt =
+					math.max(
+						timeoutAt,
+						os.clock()
+							+ BOSS_REWARD_WAIT_TIMEOUT
+					)
+
+				MultiFarm.setStatus(
+					"Waiting Loot",
+					MultiFarm.Boss
+				)
+			end
+
+		else
+
+			local remoteRewardPosition =
+				MultiFarm.Online.Enabled
+				and MultiFarm.Online.getRemoteRewardPosition(
+					MultiFarm.Boss
+				)
+				or nil
+
+			local rawLootPosition =
+				MultiFarm.getNearestRawLootPromptPosition(
+					deathPosition
+						or remoteRewardPosition,
+					CHEST_SEARCH_RADIUS
+				)
+
+			local recoveryPosition =
+				rawLootPosition
+				or remoteRewardPosition
+
+			if recoveryPosition
+				and now
+					- lastRecoveryTeleport
+					>= 0.35 then
+
+				lastRecoveryTeleport =
+					now
+
+				MultiFarm.setStatus(
+					"Waiting Loot",
+					MultiFarm.Boss
+				)
+
+				teleportToPosition(
+					recoveryPosition
+					+ Vector3.new(
+						0,
+						1,
+						0
+					)
+				)
+
+				task.wait(0.08)
+
+				if #getLootEntries()
+					> 0 then
+
+					collectAllLoot()
+
+					return
+				end
 			end
 		end
-
 
 		task.wait(
 			CHEST_POLL_INTERVAL
 		)
 	end
-end
 
+	if #getLootEntries() > 0 then
+		collectAllLoot()
+	end
+end
 
 local function collectNearbyWorldEventChest(origin)
 	if MultiFarm.isFollower() then
@@ -6248,6 +6851,11 @@ local function collectNearbyWorldEventChest(origin)
 	MultiFarm.setStatus(
 		"Open Chest",
 		MultiFarm.Boss
+	)
+
+	MultiFarm.notify(
+		"doing:open_chest",
+		'Doing "Open Chest"'
 	)
 
 	local prompt =
@@ -6970,6 +7578,11 @@ local function processBoss(bossName)
 		bossName
 	)
 
+	MultiFarm.notify(
+		"found:" .. tostring(bossName),
+		'Found "' .. tostring(bossName) .. '"'
+	)
+
 	MultiFarm.ActiveBossName =
 		bossName
 
@@ -7013,7 +7626,9 @@ local function processBoss(bossName)
 				true
 			)
 
-			MultiFarm.Online.pull()
+			MultiFarm.Online.startCritical(
+				3
+			)
 		end
 
 		MultiFarm.RewardBusy =
@@ -7926,6 +8541,19 @@ local function initUI()
 			)
 
 
+		Tabs.Main:AddToggle(
+			"FarmNotifier",
+			{
+				Title = "Notifier",
+				Default = true,
+				Callback = function(value)
+					MultiFarm.NotifierEnabled =
+						value == true
+				end
+			}
+		)
+
+
 		bossDropdown =
 			Tabs.Main:AddDropdown(
 				"BossSelect",
@@ -8257,6 +8885,32 @@ end
 task.spawn(initUI)
 
 
+table.insert(
+	Runtime.connections,
+	Players.PlayerAdded:Connect(function()
+		if MultiFarm.Online.Enabled then
+			task.defer(function()
+				MultiFarm.scan()
+				MultiFarm.refreshDropdown()
+			end)
+		end
+	end)
+)
+
+
+table.insert(
+	Runtime.connections,
+	Players.PlayerRemoving:Connect(function()
+		if MultiFarm.Online.Enabled then
+			task.defer(function()
+				MultiFarm.scan()
+				MultiFarm.refreshDropdown()
+			end)
+		end
+	end)
+)
+
+
 task.spawn(function()
 
 	MultiFarm.ensureFolder()
@@ -8290,8 +8944,21 @@ task.spawn(function()
 		local interval =
 			MultiFarm.Online.PollInterval
 
-		if MultiFarm.State == "Waiting Sync"
-			or MultiFarm.State == "Respawning" then
+		if os.clock()
+			< (
+				MultiFarm.Online.CriticalUntil
+					or 0
+			) then
+
+			interval =
+				MultiFarm.Online.CriticalPollInterval
+
+		elseif MultiFarm.State == "Waiting Sync"
+			or MultiFarm.State == "Respawning"
+			or MultiFarm.State == "Open Chest"
+			or MultiFarm.State == "Picking Loot"
+			or MultiFarm.State == "Waiting Loot"
+			or MultiFarm.RewardBusy then
 
 			interval =
 				MultiFarm.Online.FastPollInterval
@@ -8707,6 +9374,10 @@ task.spawn(function()
 				task.wait(0.35)
 
 				if MultiFarm.Online.Enabled then
+
+					MultiFarm.Online.startCritical(
+						5
+					)
 
 					MultiFarm.Online.pull()
 
