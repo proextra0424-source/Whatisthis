@@ -143,16 +143,29 @@ ENV[RUNTIME_KEY] =
 
 
 local function runtimeConnect(signal, callback)
-	local connection =
-		signal:Connect(
-			function(...)
-				if not Runtime.alive then
-					return
-				end
+	local ok, connection =
+		pcall(function()
 
-				callback(...)
-			end
-		)
+			return signal:Connect(
+				function(...)
+
+					if not Runtime.alive then
+						return
+					end
+
+					pcall(
+						callback,
+						...
+					)
+				end
+			)
+		end)
+
+	if not ok
+		or not connection then
+
+		return nil
+	end
 
 	table.insert(
 		Runtime.connections,
@@ -162,15 +175,17 @@ local function runtimeConnect(signal, callback)
 	return connection
 end
 
+Runtime.BossRegistry = {
+	Folders = {},
+	Infos = {},
+	Names = {},
+	LastValuesKey = ""
+}
 
-local DEFAULT_BOSS_NAMES = {
-	"Akazo",
-	"Datai",
-	"Domae",
-	"Fujiko",
-	"Gyutai",
-	"Nezura",
-	"Reaper"
+Runtime.AutoSkill = {
+	HoldKeys = {},
+	HoldTime = 1.2,
+	Busy = false
 }
 
 local selectedBossSet = {}
@@ -307,21 +322,61 @@ local antiAfkToggle = nil
 local autoDeliveryToggle = nil
 
 
-local ActiveNpcs =
-	workspace
-		:WaitForChild("Humanoids")
-		:WaitForChild("Regions")
-		:WaitForChild("Misc")
-		:WaitForChild("ActiveNpcs")
 
 
-local BossHuntsEvent =
-	ReplicatedStorage
-		:WaitForChild("Communication")
-		:WaitForChild("ServerAndClient")
-		:WaitForChild("Signals")
-		:WaitForChild("SignalEvent")
-		:WaitForChild("Event")
+Runtime.BossHuntsEvent =
+	nil
+
+
+function Runtime.getBossHuntsEvent()
+	local cached =
+		Runtime.BossHuntsEvent
+
+	if cached
+		and cached.Parent then
+
+		return cached
+	end
+
+	local communication =
+		ReplicatedStorage:FindFirstChild(
+			"Communication"
+		)
+
+	local serverAndClient =
+		communication
+		and communication:FindFirstChild(
+			"ServerAndClient"
+		)
+
+	local signals =
+		serverAndClient
+		and serverAndClient:FindFirstChild(
+			"Signals"
+		)
+
+	local signalEvent =
+		signals
+		and signals:FindFirstChild(
+			"SignalEvent"
+		)
+
+	local event =
+		signalEvent
+		and signalEvent:FindFirstChild(
+			"Event"
+		)
+
+	if event then
+
+		Runtime.BossHuntsEvent =
+			event
+	end
+
+	return event
+end
+
+
 
 
 local MultiFarm = {
@@ -358,18 +413,22 @@ local MultiFarm = {
 		Enabled = false,
 		Base = "https://slayer2-sync-temp.boomzil526.workers.dev",
 		Room = "sigma-" .. tostring(game.JobId),
-		Secret = "whathi11",
+		Secret = "PUT_YOUR_SYNC_SECRET_HERE",
 		Peers = {},
 		LastBossDeath = nil,
 		LastRevision = 0,
 		LastPull = 0,
-		PollInterval = 5,
-		FastPollInterval = 0.5,
-		CriticalPollInterval = 0.25,
+		LastAttempt = 0,
+		PollInterval = 10,
+		FastPollInterval = 1,
+		CriticalPollInterval = 0.5,
 		CriticalUntil = 0,
 		Busy = false,
 		LastPushSignature = "",
-		StatusFile = "slayer2_online_sync_status.txt"
+		RateLimited = false,
+		RetryAfter = 0,
+		BackoffSeconds = 300,
+		Status = ""
 	}
 }
 
@@ -438,17 +497,11 @@ end
 
 
 function MultiFarm.Online.writeStatus(value)
-	if typeof(writefile) ~= "function" then
-		return
-	end
-
-	pcall(
-		writefile,
-		MultiFarm.Online.StatusFile,
-		tostring(value or "")
-	)
+	MultiFarm.Online.Status =
+		tostring(
+			value or ""
+		)
 end
-
 
 function MultiFarm.Online.playerAlive()
 	local character =
@@ -498,6 +551,22 @@ end
 function MultiFarm.Online.call(method, path, body)
 	if not MultiFarm.Online.Enabled then
 		return nil
+	end
+
+	local now =
+		os.clock()
+
+	if MultiFarm.Online.RateLimited then
+
+		if now < (MultiFarm.Online.RetryAfter or 0) then
+			return nil
+		end
+
+		MultiFarm.Online.RateLimited =
+			false
+
+		MultiFarm.Online.RetryAfter =
+			0
 	end
 
 	if MultiFarm.Online.Secret == ""
@@ -590,15 +659,47 @@ function MultiFarm.Online.call(method, path, body)
 
 	if status ~= 200 then
 
+		local responseBody =
+			tostring(
+				response.Body
+					or response.body
+					or ""
+			)
+
+		if status == 429
+			or string.find(
+				responseBody,
+				"1027",
+				1,
+				true
+			) then
+
+			MultiFarm.Online.RateLimited =
+				true
+
+			MultiFarm.Online.RetryAfter =
+				os.clock()
+				+ MultiFarm.Online.BackoffSeconds
+
+			MultiFarm.Online.CriticalUntil =
+				0
+
+			MultiFarm.Online.writeStatus(
+				"ONLINE SYNC RATE LIMITED - retry in "
+				.. tostring(
+					MultiFarm.Online.BackoffSeconds
+				)
+				.. "s"
+			)
+
+			return nil
+		end
+
 		MultiFarm.Online.writeStatus(
 			"ONLINE SYNC HTTP "
 			.. tostring(status)
 			.. ": "
-			.. tostring(
-				response.Body
-				or response.body
-				or ""
-			)
+			.. responseBody
 		)
 
 		return nil
@@ -704,6 +805,9 @@ function MultiFarm.Online.pull()
 	end
 
 	MultiFarm.Online.Busy = true
+
+	MultiFarm.Online.LastAttempt =
+		os.clock()
 
 	local response =
 		MultiFarm.Online.call(
@@ -940,6 +1044,13 @@ function MultiFarm.Online.startCritical(seconds)
 		return
 	end
 
+	if MultiFarm.Online.RateLimited
+		and os.clock()
+			< (MultiFarm.Online.RetryAfter or 0) then
+
+		return
+	end
+
 	seconds =
 		tonumber(seconds)
 		or 5
@@ -973,7 +1084,7 @@ function MultiFarm.Online.onStatus(state, bossName)
 				or "LeaderDied"
 
 		MultiFarm.Online.startCritical(
-			10
+			5
 		)
 	elseif state == "Open Chest" then
 		eventName = "ChestOpening"
@@ -1020,6 +1131,16 @@ function MultiFarm.Online.setEnabled(value)
 	MultiFarm.Online.Peers = {}
 	MultiFarm.Online.LastBossDeath = nil
 	MultiFarm.Online.LastPushSignature = ""
+
+	if os.clock()
+		>= (MultiFarm.Online.RetryAfter or 0) then
+
+		MultiFarm.Online.RateLimited =
+			false
+
+		MultiFarm.Online.RetryAfter =
+			0
+	end
 
 	if not MultiFarm.Online.Enabled then
 
@@ -1127,6 +1248,7 @@ function MultiFarm.setStatus(state, bossName)
 		MultiFarm.Boss
 	)
 end
+
 
 
 function MultiFarm.write()
@@ -1486,10 +1608,15 @@ function MultiFarm.getLeader()
 			peer.updated
 		)
 
+	local staleLimit =
+		peer.online
+			and 15000
+			or MultiFarm.StaleMs
+
 	if not updated
 		or MultiFarm.nowMs()
 			- updated
-			> MultiFarm.StaleMs then
+			> staleLimit then
 
 		return nil
 	end
@@ -1982,7 +2109,11 @@ local function getBossRoute()
 		return selected
 	end
 
-	return DEFAULT_BOSS_NAMES
+	if #Runtime.BossRegistry.Names == 0 then
+		Runtime.BossRegistry.scan()
+	end
+
+	return Runtime.BossRegistry.Names
 end
 
 
@@ -2022,88 +2153,139 @@ local function setBossSelected(bossName, state)
 		end
 	end
 
-
 	currentBossIndex = 1
 	lastBossIndex = 1
-
 end
 
 
-local function getActiveNpcNames()
+function Runtime.BossRegistry.findInfo(container)
+	if not container then
+		return nil
+	end
+
+	local bossInfo =
+		container:FindFirstChild(
+			"BossInfo"
+		)
+		or container:FindFirstChild(
+			"Bossinfo"
+		)
+
+	if bossInfo then
+		return bossInfo
+	end
+
+	bossInfo =
+		container:FindFirstChild(
+			"BossInfo",
+			true
+		)
+		or container:FindFirstChild(
+			"Bossinfo",
+			true
+		)
+
+	return bossInfo
+end
+
+function Runtime.BossRegistry.scan()
+	local folders = {}
+	local infos = {}
 	local names = {}
 	local seen = {}
 
-	for _, object in ipairs(
-		ActiveNpcs:GetChildren()
-	) do
+	local humanoids =
+		workspace:FindFirstChild(
+			"Humanoids"
+		)
 
-		if object:IsA("Folder")
-			or object:IsA("Model") then
-
-			if not seen[object.Name] then
-				seen[object.Name] =
-					true
-
-				table.insert(
-					names,
-					object.Name
-				)
-			end
-		end
-	end
-
-	local finalSelection =
-		workspace
-			:FindFirstChild("Humanoids")
-
-	finalSelection =
-		finalSelection
-		and finalSelection:FindFirstChild(
+	local regions =
+		humanoids
+		and humanoids:FindFirstChild(
 			"Regions"
 		)
 
-	finalSelection =
-		finalSelection
-		and finalSelection:FindFirstChild(
-			"Final Selection Plains"
-		)
+	if not regions then
 
-	finalSelection =
-		finalSelection
-		and finalSelection:FindFirstChild(
-			"ActiveNpcs"
-		)
+		return Runtime.BossRegistry.Names
+			or {}
+	end
 
-	local fujiko =
-		finalSelection
-		and finalSelection:FindFirstChild(
-			"Fujiko"
-		)
+	for _, region in ipairs(
+		regions:GetChildren()
+	) do
 
-	if fujiko
-		and not seen.Fujiko then
+		local activeNpcs =
+			region:FindFirstChild(
+				"ActiveNpcs"
+			)
 
-		seen.Fujiko =
-			true
+		if activeNpcs then
 
-		table.insert(
-			names,
-			"Fujiko"
-		)
+			for _, container in ipairs(
+				activeNpcs:GetChildren()
+			) do
+
+				if container:IsA("Folder")
+					or container:IsA("Model") then
+
+					local bossInfo =
+						Runtime.BossRegistry.findInfo(
+							container
+						)
+
+					if bossInfo then
+
+						local bossName =
+							tostring(
+								container.Name
+							)
+
+						if not seen[bossName] then
+
+							seen[bossName] =
+								true
+
+							folders[bossName] =
+								container
+
+							infos[bossName] =
+								bossInfo
+
+							table.insert(
+								names,
+								bossName
+							)
+						end
+					end
+				end
+			end
+		end
 	end
 
 	table.sort(
 		names,
 		function(a, b)
-			return
-				string.lower(a)
+			return string.lower(a)
 				< string.lower(b)
 		end
 	)
 
+	Runtime.BossRegistry.Folders =
+		folders
+
+	Runtime.BossRegistry.Infos =
+		infos
+
+	Runtime.BossRegistry.Names =
+		names
+
 	return names
 end
 
+local function getActiveNpcNames()
+	return Runtime.BossRegistry.scan()
+end
 
 local function getCharacter()
 	return LocalPlayer.Character
@@ -2496,6 +2678,8 @@ function Universal.cleanup()
 end
 
 
+
+
 runtimeConnect(
 	UserInputService.JumpRequest,
 	function()
@@ -2763,6 +2947,7 @@ Runtime.cleanup = function()
 	autoDeliveryEnabled = false
 	deliveryBusy = false
 	bossProcessBusy = false
+	Runtime.AutoSkill.Busy = false
 	setAntiAfk(false)
 
 	pcall(function()
@@ -2860,6 +3045,8 @@ Runtime.cleanup = function()
 
 	destroyOldUI()
 end
+
+
 
 
 runtimeConnect(LocalPlayer.CharacterAdded, function(character)
@@ -2964,45 +3151,36 @@ end
 
 
 local function getBossFolder(bossName)
-	if bossName == "Fujiko" then
+	bossName =
+		tostring(
+			bossName or ""
+		)
 
-		local humanoids =
-			workspace:FindFirstChild(
-				"Humanoids"
-			)
+	local folder =
+		Runtime.BossRegistry.Folders[
+			bossName
+		]
 
-		local regions =
-			humanoids
-			and humanoids:FindFirstChild(
-				"Regions"
-			)
+	if folder
+		and folder.Parent then
 
-		local finalSelection =
-			regions
-			and regions:FindFirstChild(
-				"Final Selection Plains"
-			)
-
-		local activeNpcs =
-			finalSelection
-			and finalSelection:FindFirstChild(
-				"ActiveNpcs"
-			)
-
-		local fujiko =
-			activeNpcs
-			and activeNpcs:FindFirstChild(
-				"Fujiko"
-			)
-
-		if fujiko then
-			return fujiko
-		end
+		return folder
 	end
 
-	return ActiveNpcs:FindFirstChild(
-		bossName
-	)
+	Runtime.BossRegistry.scan()
+
+	folder =
+		Runtime.BossRegistry.Folders[
+			bossName
+		]
+
+	if folder
+		and folder.Parent then
+
+		return folder
+	end
+
+	return nil
 end
 
 local function getBossHumanoid(model)
@@ -3030,62 +3208,99 @@ local function getBossRoot(model)
 end
 
 local function getLiveBoss(bossName)
-	local folder = getBossFolder(bossName)
+	local folder =
+		getBossFolder(
+			bossName
+		)
+
 	if not folder then
 		return nil
 	end
 
-	local boss =
+	local sameName =
 		folder:FindFirstChild(
 			bossName
 		)
 
-	if not boss
-		and folder:IsA("Model") then
+	if sameName
+		and sameName:IsA("Model") then
 
-		boss =
-			folder
+		local humanoid =
+			getBossHumanoid(
+				sameName
+			)
+
+		if humanoid
+			and humanoid.Health > 0 then
+
+			return sameName
+		end
 	end
 
-	if not boss
-		or not boss:IsA("Model") then
+	if folder:IsA("Model") then
 
-		return nil
+		local humanoid =
+			getBossHumanoid(
+				folder
+			)
+
+		if humanoid
+			and humanoid.Health > 0 then
+
+			return folder
+		end
 	end
 
-	local humanoid =
-		getBossHumanoid(
-			boss
-		)
+	for _, child in ipairs(
+		folder:GetChildren()
+	) do
 
-	if not humanoid
-		or humanoid.Health <= 0 then
+		if child:IsA("Model") then
 
-		return nil
+			local humanoid =
+				getBossHumanoid(
+					child
+				)
+
+			if humanoid
+				and humanoid.Health > 0 then
+
+				return child
+			end
+		end
 	end
 
-	return boss
+	return nil
 end
 
 local function getBossCenter(bossName)
-	local folder = getBossFolder(bossName)
+	local folder =
+		getBossFolder(
+			bossName
+		)
+
 	if not folder then
 		return nil
 	end
 
 	local bossInfo =
-		folder:FindFirstChild(
-			"BossInfo"
-		)
-		or folder:FindFirstChild(
-			"Bossinfo"
+		Runtime.BossRegistry.Infos[
+			tostring(
+				bossName
+			)
+		]
+		or Runtime.BossRegistry.findInfo(
+			folder
 		)
 
 	if not bossInfo then
 		return nil
 	end
 
-	local center = bossInfo:GetAttribute("Center")
+	local center =
+		bossInfo:GetAttribute(
+			"Center"
+		)
 
 	if typeof(center) == "Vector3" then
 		return center
@@ -3097,7 +3312,6 @@ local function getBossCenter(bossName)
 
 	return nil
 end
-
 
 local function createFollowConstraints()
 	local root = getCharacterRoot()
@@ -3577,10 +3791,21 @@ end
 function Delivery.fireDeliveryRemote(...)
 	local args = {...}
 
+	local event =
+		Runtime.getBossHuntsEvent()
+
+	if not event then
+
+		
+		return false
+	end
+
 	return pcall(function()
-		BossHuntsEvent:FireServer(
+
+		event:FireServer(
 			unpack(args)
 		)
+
 	end)
 end
 
@@ -4433,64 +4658,131 @@ local function mouseOverFluentControl()
 end
 
 
-local function pressKey(keyCode)
+local function pressKey(keyCode, holdTime)
 	if inputBusy then
 		return false
 	end
 
-	inputBusy = true
+	inputBusy =
+		true
 
-	local ok = pcall(function()
+	holdTime =
+		tonumber(holdTime)
+		or KEY_HOLD_TIME
+
+	if holdTime < KEY_HOLD_TIME then
+
+		holdTime =
+			KEY_HOLD_TIME
+	end
+
+	local ok =
+		pcall(function()
+
+			VirtualInputManager:SendKeyEvent(
+				true,
+				keyCode,
+				false,
+				game
+			)
+
+			local releaseAt =
+				os.clock()
+				+ holdTime
+
+			while os.clock()
+				< releaseAt do
+
+				if not Runtime.alive
+					or not farmEnabled
+					or deliveryBusy then
+
+					break
+				end
+
+				task.wait(
+					math.min(
+						0.03,
+						math.max(
+							0,
+							releaseAt
+								- os.clock()
+						)
+					)
+				)
+			end
+		end)
+
+	pcall(function()
+
 		VirtualInputManager:SendKeyEvent(
-			true,
+			false,
 			keyCode,
 			false,
 			game
 		)
 
-		task.wait(KEY_HOLD_TIME)
-
-		VirtualInputManager:SendKeyEvent(
-			false,
-			keyCode,
-			false,
-			game
-		)
 	end)
 
-	inputBusy = false
+	inputBusy =
+		false
 
 	return ok
 end
-
 
 local function useAutoSkill()
 	if #selectedAutoSkillKeys == 0 then
 		return false
 	end
 
-	if clanSkillBusy then
+	if clanSkillBusy
+		or Runtime.AutoSkill.Busy then
+
 		return false
 	end
 
-	local used = false
+	Runtime.AutoSkill.Busy =
+		true
 
-	for _, keyCode in ipairs(selectedAutoSkillKeys) do
-		if not Runtime.alive
-			or not farmEnabled
-			or clanSkillBusy then
+	task.spawn(function()
 
-			break
+		for _, keyCode in ipairs(
+			selectedAutoSkillKeys
+		) do
+
+			if not Runtime.alive
+				or not farmEnabled
+				or deliveryBusy
+				or clanSkillBusy then
+
+				break
+			end
+
+			local holdTime =
+				KEY_HOLD_TIME
+
+			if Runtime.AutoSkill.HoldKeys[
+				keyCode
+			] then
+
+				holdTime =
+					Runtime.AutoSkill.HoldTime
+			end
+
+			pressKey(
+				keyCode,
+				holdTime
+			)
+
+			task.wait(0.03)
 		end
 
-		if pressKey(keyCode) then
-			used = true
-		end
-	end
+		Runtime.AutoSkill.Busy =
+			false
+	end)
 
-	return used
+	return true
 end
-
 
 local function useClanSkill()
 	if not selectedClanSkillKey then
@@ -4644,6 +4936,8 @@ local function positionOverInteractiveGui(position)
 
 	return false
 end
+
+
 
 
 runtimeConnect(
@@ -4930,6 +5224,7 @@ local function fightBoss(bossName, boss)
 			humanoid.HealthChanged:Connect(function(health)
 
 				if health <= 0 then
+
 					bossDiedConfirmed =
 						true
 				end
@@ -4958,13 +5253,6 @@ local function fightBoss(bossName, boss)
 	local function getUsableBoss(model)
 		if not model
 			or not model.Parent then
-
-			if bossWasEngaged
-				and model then
-
-				bossDiedConfirmed =
-					true
-			end
 
 			return nil, nil
 		end
@@ -5667,38 +5955,94 @@ local function findNearestWorldEventsChest(origin)
 		return nil
 	end
 
-	local chestsFolder = workspace:FindFirstChild("Chests")
+	local chestsFolder =
+		workspace:FindFirstChild(
+			"Chests"
+		)
+
 	if not chestsFolder then
 		return nil
 	end
 
-	local nearestChest = nil
-	local nearestDistance = CHEST_SEARCH_RADIUS
+	local validNames = {
+		["World Events Chest"] = true,
+		["Lost Chest"] = true,
+		["Ice Chest"] = true
+	}
 
-	for _, object in ipairs(chestsFolder:GetDescendants()) do
-		if object.Name == "World Events Chest" then
-			local position = getObjectPosition(object)
+	local nearestChest =
+		nil
+
+	local nearestDistance =
+		CHEST_SEARCH_RADIUS
+
+	for _, object in ipairs(
+		chestsFolder:GetDescendants()
+	) do
+
+		if validNames[
+			object.Name
+		] then
+
+			local position =
+				getObjectPosition(
+					object
+				)
 
 			if position then
-				local distance = (position - origin).Magnitude
 
-				if distance <= nearestDistance then
-					nearestDistance = distance
-					nearestChest = object
+				local distance =
+					(
+						position
+						- origin
+					).Magnitude
+
+				if distance
+					<= nearestDistance then
+
+					nearestDistance =
+						distance
+
+					nearestChest =
+						object
 				end
 			end
 		end
 	end
 
-	local direct = chestsFolder:FindFirstChild("World Events Chest")
-	if direct then
-		local position = getObjectPosition(direct)
+	for chestName in pairs(
+		validNames
+	) do
 
-		if position then
-			local distance = (position - origin).Magnitude
+		local direct =
+			chestsFolder:FindFirstChild(
+				chestName
+			)
 
-			if distance <= nearestDistance then
-				nearestChest = direct
+		if direct then
+
+			local position =
+				getObjectPosition(
+					direct
+				)
+
+			if position then
+
+				local distance =
+					(
+						position
+						- origin
+					).Magnitude
+
+				if distance
+					<= nearestDistance then
+
+					nearestDistance =
+						distance
+
+					nearestChest =
+						direct
+				end
 			end
 		end
 	end
@@ -6700,8 +7044,9 @@ local function handleBossRewards(deathPosition)
 			os.clock()
 
 		if MultiFarm.Online.Enabled
+			and not MultiFarm.Online.RateLimited
 			and now - lastOnlinePull
-				>= 0.25 then
+				>= 1 then
 
 			lastOnlinePull =
 				now
@@ -7202,9 +7547,18 @@ local function claimCrowQuest(id)
 		return false
 	end
 
+	local event =
+		Runtime.getBossHuntsEvent()
+
+	if not event then
+
+		
+		return false
+	end
+
 	return pcall(function()
 
-		BossHuntsEvent:FireServer(
+		event:FireServer(
 			"BossHuntsRequest",
 			{
 				action = "Claim",
@@ -7614,7 +7968,7 @@ local function processBoss(bossName)
 		return "retry"
 	end
 
-	if result == "boss_dead" then
+if result == "boss_dead" then
 
 		if MultiFarm.Online.Enabled then
 
@@ -7720,6 +8074,36 @@ local function applyAutoSkillSelection(valueTable)
 					selectedAutoSkillKeys,
 					keyCode
 				)
+			end
+		end
+	end
+end
+
+
+local function applyHoldSkillSelection(valueTable)
+	Runtime.AutoSkill.HoldKeys =
+		{}
+
+	if type(valueTable) ~= "table" then
+		return
+	end
+
+	for _, keyName in ipairs(
+		SKILL_KEY_ORDER
+	) do
+
+		if valueTable[keyName] then
+
+			local keyCode =
+				keyNameToCode(
+					keyName
+				)
+
+			if keyCode then
+
+				Runtime.AutoSkill.HoldKeys[
+					keyCode
+				] = true
 			end
 		end
 	end
@@ -8425,7 +8809,10 @@ local function applyResponsiveWindowLayout(Window, isMobile)
 end
 
 
+
+
 local function initUI()
+	
 	local ok, err = pcall(function()
 
 		if not Runtime.alive then
@@ -8433,6 +8820,7 @@ local function initUI()
 		end
 
 
+		
 		local Fluent =
 			loadstring(
 				game:HttpGet(
@@ -8441,6 +8829,8 @@ local function initUI()
 			)()
 
 
+		
+		
 		local SaveManager =
 			loadstring(
 				game:HttpGet(
@@ -8449,6 +8839,8 @@ local function initUI()
 			)()
 
 
+		
+		
 		local InterfaceManager =
 			loadstring(
 				game:HttpGet(
@@ -8468,6 +8860,7 @@ local function initUI()
 		end
 
 
+		
 		Runtime.fluent = Fluent
 
 
@@ -8479,6 +8872,7 @@ local function initUI()
 			isMobile =
 			getResponsiveWindowSize()
 
+		
 		local Window =
 			Fluent:CreateWindow({
 				Title = "Slayer 2 Script By Sigma",
@@ -8493,6 +8887,7 @@ local function initUI()
 		Runtime.window =
 			Window
 
+		
 		applyResponsiveWindowLayout(
 			Window,
 			isMobile
@@ -8505,6 +8900,7 @@ local function initUI()
 		end
 
 
+		
 		local Tabs = {
 			Main = Window:AddTab({
 				Title = "Main",
@@ -8559,7 +8955,7 @@ local function initUI()
 				"BossSelect",
 				{
 					Title = "Boss Select",
-					Values = getActiveNpcNames(),
+					Values = Runtime.BossRegistry.Names,
 					Multi = true,
 					Default = {},
 					Callback = function(value)
@@ -8626,6 +9022,43 @@ local function initUI()
 					end
 				}
 			)
+
+
+		Tabs.Misc:AddDropdown(
+			"HoldSkills",
+			{
+				Title = "Hold Skills",
+				Values = {"Z", "X", "C", "V", "B"},
+				Multi = true,
+				Default = {},
+				Callback = function(value)
+					applyHoldSkillSelection(
+						value
+					)
+				end
+			}
+		)
+
+
+		Tabs.Misc:AddSlider(
+			"HoldSkillDuration",
+			{
+				Title = "Hold Duration",
+				Default = 1.2,
+				Min = 0.1,
+				Max = 5,
+				Rounding = 1,
+				Callback = function(value)
+
+					Runtime.AutoSkill.HoldTime =
+						math.max(
+							0.1,
+							tonumber(value)
+								or 1.2
+						)
+				end
+			}
+		)
 
 
 		antiAfkToggle =
@@ -8853,6 +9286,7 @@ local function initUI()
 
 		Window:SelectTab(1)
 
+		
 		task.defer(function()
 			if Runtime.alive then
 				findFluentGuiRoot()
@@ -8877,9 +9311,19 @@ local function initUI()
 	end)
 
 	if not ok then
-		warn("[Slayer 2 UI] " .. tostring(err))
-	end
+
+		
+		warn(
+			"[Slayer 2 UI] "
+			.. tostring(err)
+		)
+
+	else
+
+			end
 end
+
+
 
 
 task.spawn(initUI)
@@ -8913,6 +9357,84 @@ table.insert(
 
 task.spawn(function()
 
+	task.wait(0.5)
+
+	if not Runtime.alive then
+		return
+	end
+
+	local function refreshBossValues()
+		local values =
+			getActiveNpcNames()
+
+		for bossName, selected
+			in pairs(
+				selectedBossSet
+			) do
+
+			if selected then
+
+				local found =
+					false
+
+				for _, value in ipairs(
+					values
+				) do
+
+					if value == bossName then
+						found = true
+						break
+					end
+				end
+
+				if not found then
+					table.insert(
+						values,
+						bossName
+					)
+				end
+			end
+		end
+
+		table.sort(
+			values,
+			function(a, b)
+				return string.lower(
+					tostring(a)
+				)
+					< string.lower(
+						tostring(b)
+					)
+			end
+		)
+
+		Runtime.BossRegistry.LastValuesKey =
+			table.concat(
+				values,
+				"\0"
+			)
+
+		if bossDropdown then
+
+			pcall(function()
+				bossDropdown:SetValues(
+					values
+				)
+			end)
+		end
+	end
+
+	refreshBossValues()
+
+	task.wait(4.5)
+
+	if Runtime.alive then
+		refreshBossValues()
+	end
+end)
+
+task.spawn(function()
+
 	MultiFarm.ensureFolder()
 	MultiFarm.write()
 
@@ -8923,7 +9445,9 @@ task.spawn(function()
 		MultiFarm.refreshDropdown()
 
 		task.wait(
-			MultiFarm.HeartbeatInterval
+			MultiFarm.Enabled
+				and MultiFarm.HeartbeatInterval
+				or 1
 		)
 	end
 
@@ -8937,18 +9461,41 @@ task.spawn(function()
 
 		if not MultiFarm.Online.Enabled then
 
-			task.wait(0.25)
+			task.wait(1)
 			continue
 		end
+
+		local now =
+			os.clock()
+
+		if MultiFarm.Online.RateLimited
+			and now
+				< (MultiFarm.Online.RetryAfter or 0) then
+
+			task.wait(1)
+			continue
+		end
+
+		if MultiFarm.Online.RateLimited then
+
+			MultiFarm.Online.RateLimited =
+				false
+
+			MultiFarm.Online.RetryAfter =
+				0
+		end
+
+		local shouldPoll =
+			false
 
 		local interval =
 			MultiFarm.Online.PollInterval
 
-		if os.clock()
-			< (
-				MultiFarm.Online.CriticalUntil
-					or 0
-			) then
+		if now
+			< (MultiFarm.Online.CriticalUntil or 0) then
+
+			shouldPoll =
+				true
 
 			interval =
 				MultiFarm.Online.CriticalPollInterval
@@ -8960,21 +9507,34 @@ task.spawn(function()
 			or MultiFarm.State == "Waiting Loot"
 			or MultiFarm.RewardBusy then
 
+			shouldPoll =
+				true
+
 			interval =
 				MultiFarm.Online.FastPollInterval
+
+		elseif MultiFarm.isFollower() then
+
+			shouldPoll =
+				true
+
+			interval =
+				MultiFarm.Online.PollInterval
 		end
 
-		if os.clock()
-			- MultiFarm.Online.LastPull
-			>= interval then
+		if shouldPoll
+			and now
+				- (MultiFarm.Online.LastAttempt or 0)
+				>= interval then
 
 			MultiFarm.Online.pull()
 			MultiFarm.scan()
 			MultiFarm.refreshDropdown()
 		end
 
-		task.wait(0.25)
+		task.wait(0.5)
 	end
+
 end)
 
 
