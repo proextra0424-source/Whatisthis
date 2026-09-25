@@ -413,7 +413,7 @@ local MultiFarm = {
 		Enabled = false,
 		Base = "https://slayer2-sync-temp.boomzil526.workers.dev",
 		Room = "sigma-" .. tostring(game.JobId),
-		Secret = "PUT_YOUR_SYNC_SECRET_HERE",
+		Secret = "whathi11",
 		Peers = {},
 		LastBossDeath = nil,
 		LastRevision = 0,
@@ -1073,11 +1073,26 @@ function MultiFarm.Online.onStatus(state, bossName)
 		return
 	end
 
-	local eventName = nil
+	state =
+		tostring(
+			state or "Idle"
+		)
+
+	bossName =
+		tostring(
+			bossName
+			or MultiFarm.Boss
+			or ""
+		)
+
+	local eventName =
+		"StatusChanged"
 
 	if state == "Attacking" then
 		eventName = "BossEngaged"
+
 	elseif state == "Respawning" then
+
 		eventName =
 			MultiFarm.isFollower()
 				and "FollowerDied"
@@ -1086,28 +1101,44 @@ function MultiFarm.Online.onStatus(state, bossName)
 		MultiFarm.Online.startCritical(
 			5
 		)
+
 	elseif state == "Open Chest" then
 		eventName = "ChestOpening"
+
 	elseif state == "Picking Loot" then
 		eventName = "LootPending"
+
+	elseif state == "Waiting Loot" then
+		eventName = "WaitingLoot"
+
 	elseif state == "Delivery" then
 		eventName = "DeliveryStarted"
+
 	elseif state == "Waiting Sync" then
+
 		eventName = "WaitingSync"
 
 		MultiFarm.Online.startCritical(
 			5
 		)
+
 	elseif state == "Catching Up" then
 		eventName = "CatchingUp"
+
 	elseif state == "Resuming" then
 		eventName = "Resuming"
+
+	elseif state == "Traveling" then
+		eventName = "Traveling"
+
+	elseif state == "Crow Quest" then
+		eventName = "CrowQuest"
+
+	elseif state == "Ready" then
+		eventName = "Ready"
+
 	elseif state == "Idle" then
 		eventName = "Idle"
-	end
-
-	if not eventName then
-		return
 	end
 
 	task.spawn(function()
@@ -1122,7 +1153,6 @@ function MultiFarm.Online.onStatus(state, bossName)
 
 	end)
 end
-
 
 function MultiFarm.Online.setEnabled(value)
 	MultiFarm.Online.Enabled =
@@ -1159,12 +1189,9 @@ function MultiFarm.Online.setEnabled(value)
 
 	task.spawn(function()
 
-		MultiFarm.Online.push(
-			"Online",
+		MultiFarm.Online.onStatus(
 			MultiFarm.State,
-			MultiFarm.Boss,
-			MultiFarm.ActiveBossPosition,
-			true
+			MultiFarm.Boss
 		)
 
 		MultiFarm.Online.pull()
@@ -1225,15 +1252,21 @@ function MultiFarm.setStatus(state, bossName)
 			state or "Idle"
 		)
 
-	if bossName ~= nil then
-		MultiFarm.Boss =
-			tostring(
+	local nextBoss =
+		bossName ~= nil
+			and tostring(
 				bossName
 			)
-	end
+			or tostring(
+				MultiFarm.Boss
+				or ""
+			)
 
 	if MultiFarm.State == state
-		and bossName == nil then
+		and tostring(
+			MultiFarm.Boss
+			or ""
+		) == nextBoss then
 
 		return
 	end
@@ -1241,15 +1274,16 @@ function MultiFarm.setStatus(state, bossName)
 	MultiFarm.State =
 		state
 
+	MultiFarm.Boss =
+		nextBoss
+
 	MultiFarm.write()
 
 	MultiFarm.Online.onStatus(
 		state,
-		MultiFarm.Boss
+		nextBoss
 	)
 end
-
-
 
 function MultiFarm.write()
 	if not MultiFarm.ensureFolder() then
