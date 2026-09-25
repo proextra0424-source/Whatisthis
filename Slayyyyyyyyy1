@@ -188,6 +188,21 @@ Runtime.AutoSkill = {
 	Busy = false
 }
 
+Runtime.WeaponSkill = {
+	Key = nil,
+	Name = nil,
+	Updating = false,
+	Dropdown = nil,
+	Interval = 0.10
+}
+
+Runtime.PlayerGuard = {
+	Limit = 4,
+	Paused = false,
+	Snapshot = nil,
+	LastCount = 0
+}
+
 local selectedBossSet = {}
 local selectedBossOrder = {}
 
@@ -249,6 +264,7 @@ local WEAPON_MASTERY_EQUIP_DELAY = 0.08
 
 local CROW_PRE_OPEN_DELAY = 1.5
 local CROW_UI_TIMEOUT = 6
+local CROW_SAFE_HEIGHT = 25
 local CROW_EMPTY_UI_GRACE = 1
 local CROW_POLL_INTERVAL = 0.05
 
@@ -413,7 +429,7 @@ local MultiFarm = {
 		Enabled = false,
 		Base = "https://slayer2-sync-temp.boomzil526.workers.dev",
 		Room = "sigma-" .. tostring(game.JobId),
-		Secret = "whathi11",
+		Secret = "PUT_YOUR_SYNC_SECRET_HERE",
 		Peers = {},
 		LastBossDeath = nil,
 		LastRevision = 0,
@@ -2982,6 +2998,8 @@ Runtime.cleanup = function()
 	deliveryBusy = false
 	bossProcessBusy = false
 	Runtime.AutoSkill.Busy = false
+	Runtime.PlayerGuard.Paused = false
+	Runtime.PlayerGuard.Snapshot = nil
 	setAntiAfk(false)
 
 	pcall(function()
@@ -5111,7 +5129,9 @@ local function runWeaponMasteryBurst(
 	boss,
 	getUsableBossCallback
 )
-	if not weaponMasteryFarmEnabled then
+	if not weaponMasteryFarmEnabled
+		and not Runtime.WeaponSkill.Key then
+
 		return true
 	end
 
@@ -5136,6 +5156,9 @@ local function runWeaponMasteryBurst(
 		+ WEAPON_MASTERY_DURATION
 
 	local nextAttack =
+		0
+
+	local nextWeaponSkill =
 		0
 
 	while Runtime.alive
@@ -5169,13 +5192,26 @@ local function runWeaponMasteryBurst(
 		local now =
 			os.clock()
 
-		if now >= nextAttack then
+		if weaponMasteryFarmEnabled
+			and now >= nextAttack then
 
 			nextAttack =
 				now
 				+ ATTACK_INTERVAL
 
 			attackOnce()
+		end
+
+		if Runtime.WeaponSkill.Key
+			and now >= nextWeaponSkill then
+
+			nextWeaponSkill =
+				now
+				+ Runtime.WeaponSkill.Interval
+
+			pressKey(
+				Runtime.WeaponSkill.Key
+			)
 		end
 
 		task.wait(0.02)
@@ -5189,7 +5225,6 @@ local function runWeaponMasteryBurst(
 
 	return true
 end
-
 
 local function fightBoss(bossName, boss)
 	if deliveryBusy then
@@ -5594,7 +5629,8 @@ local function fightBoss(bossName, boss)
 	end
 
 
-	if weaponMasteryFarmEnabled then
+	if weaponMasteryFarmEnabled
+		or Runtime.WeaponSkill.Key then
 
 		runWeaponMasteryBurst(
 			boss,
@@ -7484,10 +7520,15 @@ local function getCrowQuestData(holder)
 end
 
 
-local function waitForCrowQuestHolder()
+local function waitForCrowQuestHolder(timeoutSeconds)
 	local timeoutAt =
 		os.clock()
-		+ CROW_UI_TIMEOUT
+		+ (
+			tonumber(
+				timeoutSeconds
+			)
+			or CROW_UI_TIMEOUT
+		)
 
 	local emptySince =
 		nil
@@ -7641,36 +7682,127 @@ local function tryAutoCrowQuest(bossName, boss)
 	crowHandledBosses[boss] =
 		true
 
+	local followActive =
+		true
+
+	local function stopCrowFollow()
+		followActive =
+			false
+
+		destroyFollow()
+	end
+
+	local function canContinue()
+		return Runtime.alive
+			and farmEnabled
+			and not deliveryBusy
+			and isPlayerAlive()
+			and boss
+			and boss.Parent
+	end
+
+	if not createFollowConstraints() then
+
+		local bossRoot =
+			getBossRoot(
+				boss
+			)
+
+		if bossRoot then
+
+			teleportToPosition(
+				bossRoot.Position
+				+ Vector3.new(
+					0,
+					CROW_SAFE_HEIGHT,
+					0
+				)
+			)
+		end
+	end
+
+	task.spawn(function()
+
+		while followActive
+			and canContinue() do
+
+			local bossRoot =
+				getBossRoot(
+					boss
+				)
+
+			if bossRoot then
+
+				local targetPosition =
+					bossRoot.Position
+					+ Vector3.new(
+						0,
+						CROW_SAFE_HEIGHT,
+						0
+					)
+
+				if followPosition
+					and followPosition.Parent then
+
+					followPosition.Position =
+						targetPosition
+
+				else
+
+					local root =
+						getCharacterRoot()
+
+					if root
+						and (
+							root.Position
+								- targetPosition
+						).Magnitude
+							> 6 then
+
+						teleportToPosition(
+							targetPosition
+						)
+					end
+				end
+			end
+
+			task.wait(0.03)
+		end
+	end)
+
 	task.wait(
 		CROW_PRE_OPEN_DELAY
 	)
 
-	if not Runtime.alive
-		or not farmEnabled
-		or not isPlayerAlive() then
+	if not canContinue() then
 
-		return false
-	end
+		stopCrowFollow()
 
-	if not boss.Parent then
 		return false
 	end
 
 	if not setEquippedSlot(4) then
+
+		stopCrowFollow()
+
 		closeCrowQuestAndRestoreTool()
+
 		return false
 	end
 
 	local holder =
-		waitForCrowQuestHolder()
+		waitForCrowQuestHolder(
+			CROW_UI_TIMEOUT
+		)
 
 	if not holder then
+
+		stopCrowFollow()
 
 		closeCrowQuestAndRestoreTool()
 
 		return false
 	end
-
 
 	local matchedQuest =
 		findCrowQuestForBoss(
@@ -7691,11 +7823,12 @@ local function tryAutoCrowQuest(bossName, boss)
 		task.wait(0.10)
 	end
 
+	stopCrowFollow()
+
 	closeCrowQuestAndRestoreTool()
 
 	return claimed
 end
-
 
 local function processBoss(bossName)
 	if deliveryBusy then
@@ -7776,8 +7909,28 @@ local function processBoss(bossName)
 
 		if center then
 
-			if not teleportToPosition(
+			local travelPosition =
 				center
+
+			if autoCrowQuestEnabled
+				and not CROW_SKIP_BOSSES[
+					bossName
+				]
+				and selectedBossSet[
+					bossName
+				] then
+
+				travelPosition =
+					center
+					+ Vector3.new(
+						0,
+						CROW_SAFE_HEIGHT,
+						0
+					)
+			end
+
+			if not teleportToPosition(
+				travelPosition
 			) then
 
 				return "player_died"
@@ -7816,7 +7969,7 @@ local function processBoss(bossName)
 				and isPlayerAlive() then
 
 				teleportToPosition(
-					center
+					travelPosition
 				)
 
 				task.wait(0.03)
@@ -8241,6 +8394,107 @@ local function applyClanSkillSelection(valueTable)
 end
 
 
+local function applyWeaponSkillSelection(valueTable)
+	if Runtime.WeaponSkill.Updating then
+		return
+	end
+
+	if type(valueTable) ~= "table" then
+
+		Runtime.WeaponSkill.Key =
+			nil
+
+		Runtime.WeaponSkill.Name =
+			nil
+
+		return
+	end
+
+	local selectedNames =
+		{}
+
+	for _, keyName in ipairs({
+		"Z",
+		"X",
+		"C"
+	}) do
+
+		if valueTable[keyName] then
+
+			table.insert(
+				selectedNames,
+				keyName
+			)
+		end
+	end
+
+	if #selectedNames == 0 then
+
+		Runtime.WeaponSkill.Key =
+			nil
+
+		Runtime.WeaponSkill.Name =
+			nil
+
+		return
+	end
+
+	local chosenName =
+		nil
+
+	if #selectedNames == 1 then
+
+		chosenName =
+			selectedNames[1]
+
+	else
+
+		for _, keyName in ipairs(
+			selectedNames
+		) do
+
+			if keyName
+				~= Runtime.WeaponSkill.Name then
+
+				chosenName =
+					keyName
+
+				break
+			end
+		end
+
+		chosenName =
+			chosenName
+			or selectedNames[
+				#selectedNames
+			]
+	end
+
+	Runtime.WeaponSkill.Name =
+		chosenName
+
+	Runtime.WeaponSkill.Key =
+		keyNameToCode(
+			chosenName
+		)
+
+	if #selectedNames > 1
+		and Runtime.WeaponSkill.Dropdown
+		and Runtime.WeaponSkill.Dropdown.SetValue then
+
+		Runtime.WeaponSkill.Updating =
+			true
+
+		Runtime.WeaponSkill.Dropdown:SetValue({
+			[chosenName] = true
+		})
+
+		Runtime.WeaponSkill.Updating =
+			false
+	end
+end
+
+
 local function applyBossSelection(valueTable)
 	local newSet = {}
 
@@ -8310,6 +8564,239 @@ local function setFarmEnabled(state)
 
 		currentBossIndex =
 			lastBossIndex
+	end
+end
+
+
+function Runtime.PlayerGuard.getCount()
+	return #Players:GetPlayers()
+end
+
+
+function Runtime.PlayerGuard.notify(content)
+	local fluent =
+		Runtime.fluent
+
+	if not fluent then
+		return
+	end
+
+	pcall(function()
+
+		fluent:Notify({
+			Title = "Server Player Limit",
+			Content =
+				tostring(
+					content or ""
+				),
+			Duration = 3
+		})
+
+	end)
+end
+
+
+function Runtime.PlayerGuard.pause()
+	if Runtime.PlayerGuard.Paused then
+		return
+	end
+
+	Runtime.PlayerGuard.Paused =
+		true
+
+	Runtime.PlayerGuard.Snapshot = {
+		Farm = farmEnabled,
+		AutoCrow = autoCrowQuestEnabled,
+		WeaponMastery = weaponMasteryFarmEnabled,
+		AutoDelivery = autoDeliveryEnabled,
+		AntiAFK = antiAfkEnabled,
+		InfiniteJump = Universal.InfiniteJump,
+		Fly = Universal.Fly,
+		WalkSpeed = Universal.WalkSpeedEnabled,
+		JumpPower = Universal.JumpPowerEnabled
+	}
+
+	setFarmEnabled(
+		false
+	)
+
+	Delivery.setAutoDeliveryEnabled(
+		false
+	)
+
+	autoCrowQuestEnabled =
+		false
+
+	weaponMasteryFarmEnabled =
+		false
+
+	setAntiAfk(
+		false
+	)
+
+	Universal.InfiniteJump =
+		false
+
+	Universal.setFly(
+		false
+	)
+
+	Universal.setWalkSpeedEnabled(
+		false
+	)
+
+	Universal.setJumpPowerEnabled(
+		false
+	)
+
+	pcall(function()
+		MultiFarm.endLootNoclip()
+	end)
+
+	destroyFollow()
+
+	Runtime.PlayerGuard.notify(
+		"Farm paused: "
+		.. tostring(
+			Runtime.PlayerGuard.LastCount
+		)
+		.. "/"
+		.. tostring(
+			Runtime.PlayerGuard.Limit
+		)
+		.. " players"
+	)
+end
+
+
+function Runtime.PlayerGuard.resume()
+	if not Runtime.PlayerGuard.Paused then
+		return
+	end
+
+	local snapshot =
+		Runtime.PlayerGuard.Snapshot
+		or {}
+
+	Runtime.PlayerGuard.Paused =
+		false
+
+	Runtime.PlayerGuard.Snapshot =
+		nil
+
+	autoCrowQuestEnabled =
+		snapshot.AutoCrow == true
+
+	weaponMasteryFarmEnabled =
+		snapshot.WeaponMastery == true
+
+	setAntiAfk(
+		snapshot.AntiAFK == true
+	)
+
+	Universal.InfiniteJump =
+		snapshot.InfiniteJump == true
+
+	Universal.setFly(
+		snapshot.Fly == true
+	)
+
+	Universal.setWalkSpeedEnabled(
+		snapshot.WalkSpeed == true
+	)
+
+	Universal.setJumpPowerEnabled(
+		snapshot.JumpPower == true
+	)
+
+	Delivery.setAutoDeliveryEnabled(
+		snapshot.AutoDelivery == true
+	)
+
+	setFarmEnabled(
+		snapshot.Farm == true
+	)
+
+	Runtime.PlayerGuard.notify(
+		"Farm resumed: "
+		.. tostring(
+			Runtime.PlayerGuard.LastCount
+		)
+		.. "/"
+		.. tostring(
+			Runtime.PlayerGuard.Limit
+		)
+		.. " players"
+	)
+end
+
+
+function Runtime.PlayerGuard.enforcePaused()
+	if not Runtime.PlayerGuard.Paused then
+		return
+	end
+
+	if farmEnabled then
+		setFarmEnabled(false)
+	end
+
+	if autoDeliveryEnabled then
+		Delivery.setAutoDeliveryEnabled(
+			false
+		)
+	end
+
+	autoCrowQuestEnabled =
+		false
+
+	weaponMasteryFarmEnabled =
+		false
+
+	if antiAfkEnabled then
+		setAntiAfk(false)
+	end
+
+	Universal.InfiniteJump =
+		false
+
+	if Universal.Fly then
+		Universal.setFly(false)
+	end
+
+	if Universal.WalkSpeedEnabled then
+		Universal.setWalkSpeedEnabled(
+			false
+		)
+	end
+
+	if Universal.JumpPowerEnabled then
+		Universal.setJumpPowerEnabled(
+			false
+		)
+	end
+end
+
+
+function Runtime.PlayerGuard.evaluate()
+	if not Runtime.alive then
+		return
+	end
+
+	local count =
+		Runtime.PlayerGuard.getCount()
+
+	Runtime.PlayerGuard.LastCount =
+		count
+
+	if count
+		>= Runtime.PlayerGuard.Limit then
+
+		Runtime.PlayerGuard.pause()
+		Runtime.PlayerGuard.enforcePaused()
+
+	elseif Runtime.PlayerGuard.Paused then
+
+		Runtime.PlayerGuard.resume()
 	end
 end
 
@@ -8984,6 +9471,34 @@ local function initUI()
 		)
 
 
+		Tabs.Main:AddSlider(
+			"ServerPlayerLimit",
+			{
+				Title = "Pause Farm At Player Count",
+				Default = 4,
+				Min = 2,
+				Max = 20,
+				Rounding = 0,
+				Callback = function(value)
+
+					Runtime.PlayerGuard.Limit =
+						math.clamp(
+							math.floor(
+								tonumber(value)
+									or 4
+							),
+							2,
+							20
+						)
+
+					task.defer(function()
+						Runtime.PlayerGuard.evaluate()
+					end)
+				end
+			}
+		)
+
+
 		bossDropdown =
 			Tabs.Main:AddDropdown(
 				"BossSelect",
@@ -9038,6 +9553,23 @@ local function initUI()
 					Default = {},
 					Callback = function(value)
 						applyClanSkillSelection(value)
+					end
+				}
+			)
+
+
+		Runtime.WeaponSkill.Dropdown =
+			Tabs.Misc:AddDropdown(
+				"AutoWeaponSkill",
+				{
+					Title = "Auto Weapon Skill",
+					Values = {"Z", "X", "C"},
+					Multi = true,
+					Default = {},
+					Callback = function(value)
+						applyWeaponSkillSelection(
+							value
+						)
 					end
 				}
 			)
@@ -9361,6 +9893,48 @@ end
 
 
 task.spawn(initUI)
+
+
+runtimeConnect(
+	Players.PlayerAdded,
+	function()
+
+		task.defer(function()
+			Runtime.PlayerGuard.evaluate()
+		end)
+	end
+)
+
+
+runtimeConnect(
+	Players.PlayerRemoving,
+	function()
+
+		task.delay(
+			0.15,
+			function()
+				Runtime.PlayerGuard.evaluate()
+			end
+		)
+	end
+)
+
+
+task.spawn(function()
+
+	task.wait(0.35)
+
+	while Runtime.alive do
+
+		Runtime.PlayerGuard.evaluate()
+
+		task.wait(
+			Runtime.PlayerGuard.Paused
+				and 0.25
+				or 1
+		)
+	end
+end)
 
 
 table.insert(
