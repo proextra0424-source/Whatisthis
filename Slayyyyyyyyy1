@@ -196,6 +196,33 @@ Runtime.WeaponSkill = {
 	Interval = 0.10
 }
 
+Runtime.Dungeon = {
+	Enabled = false,
+	MarkerName = "AiPrerequistes",
+	FollowHeight = 5,
+	TargetSearchInterval = 0.25,
+	SnapDistance = 12,
+	Mobs = {},
+	Scanned = false,
+	Target = nil,
+	NextTargetSearch = 0,
+	Attachment = nil,
+	Position = nil,
+	Orientation = nil,
+	NextAttack = 0,
+	NextSkill = 0,
+	BringMob = false,
+	BringDistance = 5,
+	BringAnchor = nil,
+	NextBring = 0,
+	BringInterval = 0.03,
+	HeightOffset = 0,
+	ComboFiveArmed = true,
+	ComboDodging = false,
+	ComboDodgeHeight = 30,
+	ComboDodgeTimeout = 0.75
+}
+
 Runtime.PlayerGuard = {
 	Limit = 4,
 	Paused = false,
@@ -3000,6 +3027,15 @@ Runtime.cleanup = function()
 	Runtime.AutoSkill.Busy = false
 	Runtime.PlayerGuard.Paused = false
 	Runtime.PlayerGuard.Snapshot = nil
+	Runtime.Dungeon.Enabled = false
+	Runtime.Dungeon.Target = nil
+	Runtime.Dungeon.BringMob = false
+	Runtime.Dungeon.BringAnchor = nil
+	Runtime.Dungeon.HeightOffset = 0
+	Runtime.Dungeon.ComboDodging = false
+	pcall(function()
+		Runtime.Dungeon.destroyFollow()
+	end)
 	setAntiAfk(false)
 
 	pcall(function()
@@ -4746,7 +4782,10 @@ local function pressKey(keyCode, holdTime)
 				< releaseAt do
 
 				if not Runtime.alive
-					or not farmEnabled
+					or (
+						not farmEnabled
+						and not Runtime.Dungeon.Enabled
+					)
 					or deliveryBusy then
 
 					break
@@ -4803,7 +4842,10 @@ local function useAutoSkill()
 		) do
 
 			if not Runtime.alive
-				or not farmEnabled
+				or (
+					not farmEnabled
+					and not Runtime.Dungeon.Enabled
+				)
 				or deliveryBusy
 				or clanSkillBusy then
 
@@ -5076,7 +5118,10 @@ local function attackOnce()
 	end
 
 	if not Runtime.alive
-		or not farmEnabled
+		or (
+			not farmEnabled
+			and not Runtime.Dungeon.Enabled
+		)
 		or not isPlayerAlive() then
 
 		return false
@@ -5123,6 +5168,1098 @@ local function attackOnce()
 
 	return ok
 end
+
+
+function Runtime.Dungeon.getHumanoid(model)
+	if not model then
+		return nil
+	end
+
+	return model:FindFirstChildWhichIsA(
+		"Humanoid",
+		true
+	)
+end
+
+
+function Runtime.Dungeon.getRoot(model)
+	if not model then
+		return nil
+	end
+
+	local root =
+		model:FindFirstChild(
+			"HumanoidRootPart",
+			true
+		)
+
+	if root
+		and root:IsA("BasePart") then
+
+		return root
+	end
+
+	if model.PrimaryPart
+		and model.PrimaryPart:IsA(
+			"BasePart"
+		) then
+
+		return model.PrimaryPart
+	end
+
+	return model:FindFirstChildWhichIsA(
+		"BasePart",
+		true
+	)
+end
+
+
+function Runtime.Dungeon.isAlive(model)
+	if not model
+		or not model.Parent then
+
+		return false
+	end
+
+	local humanoid =
+		Runtime.Dungeon.getHumanoid(
+			model
+		)
+
+	return humanoid ~= nil
+		and humanoid.Health > 0
+end
+
+
+function Runtime.Dungeon.getPlayerDataModel()
+	local humanoids =
+		workspace:FindFirstChild(
+			"Humanoids"
+		)
+
+	if not humanoids then
+		return nil
+	end
+
+	return humanoids:FindFirstChild(
+		LocalPlayer.Name
+	)
+end
+
+
+function Runtime.Dungeon.getLastCombo()
+	local playerModel =
+		Runtime.Dungeon.getPlayerDataModel()
+
+	if not playerModel then
+		return nil
+	end
+
+	local attributes =
+		playerModel:FindFirstChild(
+			"Attributes"
+		)
+
+	if not attributes then
+		return nil
+	end
+
+	local attributeValue =
+		attributes:GetAttribute(
+			"last_combo"
+		)
+
+	if attributeValue ~= nil then
+		return tonumber(
+			attributeValue
+		)
+	end
+
+	local valueObject =
+		attributes:FindFirstChild(
+			"last_combo"
+		)
+
+	if valueObject
+		and valueObject:IsA(
+			"ValueBase"
+		) then
+
+		return tonumber(
+			valueObject.Value
+		)
+	end
+
+	return nil
+end
+
+
+function Runtime.Dungeon.hasLocalNetworkOwnership(part)
+	if not part
+		or not part:IsA("BasePart") then
+
+		return false
+	end
+
+	local root =
+		part.AssemblyRootPart
+		or part
+
+	if root.Anchored then
+		return false
+	end
+
+	local ok, receiveAge =
+		pcall(function()
+			return root.ReceiveAge
+		end)
+
+	return ok
+		and receiveAge == 0
+end
+
+
+function Runtime.Dungeon.getNormalTargetPosition()
+	local mobRoot =
+		Runtime.Dungeon.getRoot(
+			Runtime.Dungeon.Target
+		)
+
+	if not mobRoot then
+		return nil
+	end
+
+	return mobRoot.Position
+		+ Vector3.new(
+			0,
+			Runtime.Dungeon.FollowHeight
+				+ Runtime.Dungeon.HeightOffset,
+			0
+		)
+end
+
+
+function Runtime.Dungeon.snapCharacter(position)
+	if not position then
+		return false
+	end
+
+	local character =
+		getCharacter()
+
+	local playerRoot =
+		getCharacterRoot()
+
+	if not character
+		or not playerRoot then
+
+		return false
+	end
+
+	local targetCFrame =
+		CFrame.new(
+			position
+		)
+		* CFrame.Angles(
+			math.rad(-90),
+			0,
+			0
+		)
+
+	pcall(function()
+		character:PivotTo(
+			targetCFrame
+		)
+	end)
+
+	pcall(function()
+		playerRoot.CFrame =
+			targetCFrame
+	end)
+
+	playerRoot.AssemblyLinearVelocity =
+		Vector3.zero
+
+	playerRoot.AssemblyAngularVelocity =
+		Vector3.zero
+
+	return true
+end
+
+
+function Runtime.Dungeon.setBringMob(value)
+	Runtime.Dungeon.BringMob =
+		value == true
+
+	Runtime.Dungeon.NextBring =
+		0
+
+	if Runtime.Dungeon.BringMob then
+
+		local root =
+			getCharacterRoot()
+
+		Runtime.Dungeon.BringAnchor =
+			root
+			and root.CFrame
+			or nil
+
+	else
+
+		Runtime.Dungeon.BringAnchor =
+			nil
+	end
+end
+
+
+function Runtime.Dungeon.updateBring()
+	if not Runtime.Dungeon.BringMob
+		or not Runtime.Dungeon.canRun() then
+
+		Runtime.Dungeon.BringAnchor =
+			nil
+
+		return
+	end
+
+	local now =
+		os.clock()
+
+	if now < Runtime.Dungeon.NextBring then
+		return
+	end
+
+	Runtime.Dungeon.NextBring =
+		now
+		+ Runtime.Dungeon.BringInterval
+
+	local playerRoot =
+		getCharacterRoot()
+
+	if not playerRoot then
+		return
+	end
+
+	if not Runtime.Dungeon.BringAnchor then
+		Runtime.Dungeon.BringAnchor =
+			playerRoot.CFrame
+	end
+
+	local anchor =
+		Runtime.Dungeon.BringAnchor
+
+	local look =
+		Vector3.new(
+			anchor.LookVector.X,
+			0,
+			anchor.LookVector.Z
+		)
+
+	if look.Magnitude < 0.001 then
+		look =
+			Vector3.new(
+				0,
+				0,
+				-1
+			)
+	else
+		look =
+			look.Unit
+	end
+
+	local bringPosition =
+		anchor.Position
+		+ look
+			* Runtime.Dungeon.BringDistance
+
+	for model in pairs(
+		Runtime.Dungeon.Mobs
+	) do
+
+		if not model.Parent then
+
+			Runtime.Dungeon.Mobs[model] =
+				nil
+
+		elseif Runtime.Dungeon.isAlive(
+			model
+		) then
+
+			local mobRoot =
+				Runtime.Dungeon.getRoot(
+					model
+				)
+
+			if mobRoot
+				and Runtime.Dungeon.hasLocalNetworkOwnership(
+					mobRoot
+				) then
+
+				pcall(function()
+
+					mobRoot.CFrame =
+						CFrame.new(
+							bringPosition
+						)
+
+					mobRoot.AssemblyLinearVelocity =
+						Vector3.zero
+
+					mobRoot.AssemblyAngularVelocity =
+						Vector3.zero
+				end)
+			end
+		end
+	end
+end
+
+
+function Runtime.Dungeon.performComboDodge()
+	if Runtime.Dungeon.ComboDodging
+		or not Runtime.Dungeon.canRun() then
+
+		return
+	end
+
+	Runtime.Dungeon.ComboDodging =
+		true
+
+	Runtime.Dungeon.HeightOffset =
+		Runtime.Dungeon.ComboDodgeHeight
+
+	local playerRoot =
+		getCharacterRoot()
+
+	if playerRoot then
+
+		Runtime.Dungeon.snapCharacter(
+			playerRoot.Position
+				+ Vector3.new(
+					0,
+					Runtime.Dungeon.ComboDodgeHeight,
+					0
+				)
+		)
+	end
+
+	attackOnce()
+
+	local timeoutAt =
+		os.clock()
+		+ Runtime.Dungeon.ComboDodgeTimeout
+
+	while Runtime.Dungeon.canRun()
+		and os.clock() < timeoutAt do
+
+		local combo =
+			Runtime.Dungeon.getLastCombo()
+
+		if combo ~= 5 then
+			break
+		end
+
+		task.wait(0.03)
+	end
+
+	Runtime.Dungeon.HeightOffset =
+		0
+
+	if Runtime.Dungeon.canRun() then
+
+		local returnPosition
+
+		if Runtime.Dungeon.BringMob
+			and Runtime.Dungeon.BringAnchor then
+
+			returnPosition =
+				Runtime.Dungeon.BringAnchor.Position
+
+		else
+
+			returnPosition =
+				Runtime.Dungeon.getNormalTargetPosition()
+		end
+
+		if returnPosition then
+			Runtime.Dungeon.snapCharacter(
+				returnPosition
+			)
+		end
+	end
+
+	Runtime.Dungeon.ComboDodging =
+		false
+end
+
+
+function Runtime.Dungeon.updateComboDodge()
+	if not Runtime.Dungeon.canRun() then
+		return
+	end
+
+	local combo =
+		Runtime.Dungeon.getLastCombo()
+
+	if combo == nil then
+		return
+	end
+
+	if combo ~= 5 then
+
+		Runtime.Dungeon.ComboFiveArmed =
+			true
+
+		return
+	end
+
+	if Runtime.Dungeon.ComboFiveArmed
+		and not Runtime.Dungeon.ComboDodging then
+
+		Runtime.Dungeon.ComboFiveArmed =
+			false
+
+		task.spawn(function()
+			Runtime.Dungeon.performComboDodge()
+		end)
+	end
+end
+
+
+function Runtime.Dungeon.registerModel(model)
+	if not model
+		or not model:IsA("Model")
+		or model == LocalPlayer.Character then
+
+		return
+	end
+
+	Runtime.Dungeon.Mobs[model] =
+		true
+end
+
+
+function Runtime.Dungeon.registerMarker(marker)
+	if not marker
+		or marker.Name
+			~= Runtime.Dungeon.MarkerName then
+
+		return
+	end
+
+	local model =
+		marker:FindFirstAncestorOfClass(
+			"Model"
+		)
+
+	if model then
+		Runtime.Dungeon.registerModel(
+			model
+		)
+	end
+end
+
+
+function Runtime.Dungeon.scan()
+	if Runtime.Dungeon.Scanned then
+		return
+	end
+
+	Runtime.Dungeon.Scanned =
+		true
+
+	for _, object in ipairs(
+		workspace:GetDescendants()
+	) do
+
+		if object.Name
+			== Runtime.Dungeon.MarkerName then
+
+			Runtime.Dungeon.registerMarker(
+				object
+			)
+		end
+	end
+end
+
+
+function Runtime.Dungeon.findNearestAlive()
+	local playerRoot =
+		getCharacterRoot()
+
+	if not playerRoot then
+		return nil
+	end
+
+	local nearest = nil
+	local nearestDistanceSquared =
+		math.huge
+
+	for model in pairs(
+		Runtime.Dungeon.Mobs
+	) do
+
+		if not model.Parent then
+
+			Runtime.Dungeon.Mobs[model] =
+				nil
+
+		elseif Runtime.Dungeon.isAlive(
+			model
+		) then
+
+			local mobRoot =
+				Runtime.Dungeon.getRoot(
+					model
+				)
+
+			if mobRoot then
+
+				local offset =
+					playerRoot.Position
+					- mobRoot.Position
+
+				local distanceSquared =
+					offset.X * offset.X
+					+ offset.Y * offset.Y
+					+ offset.Z * offset.Z
+
+				if distanceSquared
+					< nearestDistanceSquared then
+
+					nearestDistanceSquared =
+						distanceSquared
+
+					nearest = model
+				end
+			end
+		end
+	end
+
+	return nearest
+end
+
+
+function Runtime.Dungeon.destroyFollow()
+	if Runtime.Dungeon.Position then
+		pcall(function()
+			Runtime.Dungeon.Position:Destroy()
+		end)
+
+		Runtime.Dungeon.Position =
+			nil
+	end
+
+	if Runtime.Dungeon.Orientation then
+		pcall(function()
+			Runtime.Dungeon.Orientation:Destroy()
+		end)
+
+		Runtime.Dungeon.Orientation =
+			nil
+	end
+
+	if Runtime.Dungeon.Attachment then
+		pcall(function()
+			Runtime.Dungeon.Attachment:Destroy()
+		end)
+
+		Runtime.Dungeon.Attachment =
+			nil
+	end
+
+	local humanoid =
+		getCharacterHumanoid()
+
+	if humanoid then
+		humanoid.AutoRotate =
+			true
+	end
+end
+
+
+function Runtime.Dungeon.createFollow()
+	local playerRoot =
+		getCharacterRoot()
+
+	if not playerRoot then
+		return false
+	end
+
+	Runtime.Dungeon.destroyFollow()
+
+	local attachment =
+		Instance.new("Attachment")
+
+	attachment.Name =
+		"_DungeonFollowAttachment"
+
+	attachment.Parent =
+		playerRoot
+
+	Runtime.Dungeon.Attachment =
+		attachment
+
+	local position =
+		Instance.new("AlignPosition")
+
+	position.Name =
+		"_DungeonFollowPosition"
+
+	position.Mode =
+		Enum.PositionAlignmentMode.OneAttachment
+
+	position.Attachment0 =
+		attachment
+
+	position.MaxForce =
+		math.huge
+
+	position.MaxVelocity =
+		math.huge
+
+	position.Responsiveness =
+		200
+
+	position.RigidityEnabled =
+		true
+
+	position.ApplyAtCenterOfMass =
+		true
+
+	position.Parent =
+		playerRoot
+
+	Runtime.Dungeon.Position =
+		position
+
+	local orientation =
+		Instance.new("AlignOrientation")
+
+	orientation.Name =
+		"_DungeonFollowOrientation"
+
+	orientation.Mode =
+		Enum.OrientationAlignmentMode.OneAttachment
+
+	orientation.Attachment0 =
+		attachment
+
+	orientation.CFrame =
+		CFrame.Angles(
+			math.rad(-90),
+			0,
+			0
+		)
+
+	orientation.MaxTorque =
+		math.huge
+
+	orientation.Responsiveness =
+		200
+
+	orientation.RigidityEnabled =
+		true
+
+	orientation.Parent =
+		playerRoot
+
+	Runtime.Dungeon.Orientation =
+		orientation
+
+	return true
+end
+
+
+function Runtime.Dungeon.canRun()
+	return Runtime.Dungeon.Enabled
+		and Runtime.alive
+		and not Runtime.PlayerGuard.Paused
+		and not farmEnabled
+		and not deliveryBusy
+		and isPlayerAlive()
+end
+
+
+function Runtime.Dungeon.switchTarget(model)
+	if not model then
+		Runtime.Dungeon.Target = nil
+		return false
+	end
+
+	local humanoid =
+		getCharacterHumanoid()
+
+	local mobRoot =
+		Runtime.Dungeon.getRoot(
+			model
+		)
+
+	if not mobRoot then
+		return false
+	end
+
+	Runtime.Dungeon.Target =
+		model
+
+	Runtime.Dungeon.HeightOffset =
+		0
+
+	Runtime.Dungeon.BringAnchor =
+		nil
+
+	Runtime.Dungeon.destroyFollow()
+
+	local targetPosition =
+		mobRoot.Position
+		+ Vector3.new(
+			0,
+			Runtime.Dungeon.FollowHeight,
+			0
+		)
+
+	if not Runtime.Dungeon.snapCharacter(
+		targetPosition
+	) then
+
+		return false
+	end
+
+	if not Runtime.Dungeon.createFollow() then
+		return false
+	end
+
+	if humanoid then
+		humanoid.AutoRotate =
+			false
+	end
+
+	if Runtime.Dungeon.Position then
+
+		Runtime.Dungeon.Position.Position =
+			targetPosition
+	end
+
+	if Runtime.Dungeon.BringMob then
+
+		local playerRoot =
+			getCharacterRoot()
+
+		Runtime.Dungeon.BringAnchor =
+			playerRoot
+			and playerRoot.CFrame
+			or nil
+	end
+
+	return true
+end
+
+function Runtime.Dungeon.startFollow()
+	if not Runtime.Dungeon.canRun() then
+		return false
+	end
+
+	Runtime.Dungeon.scan()
+
+	local target =
+		Runtime.Dungeon.findNearestAlive()
+
+	if target then
+		return Runtime.Dungeon.switchTarget(
+			target
+		)
+	end
+
+	Runtime.Dungeon.Target =
+		nil
+
+	return false
+end
+
+
+function Runtime.Dungeon.stopFollow()
+	Runtime.Dungeon.Target =
+		nil
+
+	Runtime.Dungeon.NextTargetSearch =
+		0
+
+	Runtime.Dungeon.destroyFollow()
+end
+
+
+function Runtime.Dungeon.setEnabled(value)
+	Runtime.Dungeon.Enabled =
+		value == true
+
+	Runtime.Dungeon.NextAttack =
+		0
+
+	Runtime.Dungeon.NextSkill =
+		0
+
+	Runtime.Dungeon.NextBring =
+		0
+
+	Runtime.Dungeon.HeightOffset =
+		0
+
+	Runtime.Dungeon.ComboDodging =
+		false
+
+	local combo =
+		Runtime.Dungeon.getLastCombo()
+
+	Runtime.Dungeon.ComboFiveArmed =
+		combo ~= 5
+
+	if Runtime.Dungeon.Enabled then
+
+		Runtime.Dungeon.scan()
+
+		if Runtime.Dungeon.canRun() then
+			Runtime.Dungeon.startFollow()
+		end
+
+	else
+
+		Runtime.Dungeon.BringAnchor =
+			nil
+
+		Runtime.Dungeon.stopFollow()
+	end
+end
+
+
+function Runtime.Dungeon.updateFollow()
+	if not Runtime.Dungeon.Enabled then
+		return
+	end
+
+	if not Runtime.Dungeon.canRun() then
+
+		if Runtime.Dungeon.Attachment
+			or Runtime.Dungeon.Position
+			or Runtime.Dungeon.Orientation then
+
+			Runtime.Dungeon.destroyFollow()
+		end
+
+		Runtime.Dungeon.Target =
+			nil
+
+		Runtime.Dungeon.BringAnchor =
+			nil
+
+		return
+	end
+
+	local playerRoot =
+		getCharacterRoot()
+
+	if not playerRoot then
+		return
+	end
+
+	if not Runtime.Dungeon.Attachment
+		or Runtime.Dungeon.Attachment.Parent
+			~= playerRoot
+		or not Runtime.Dungeon.Position
+		or not Runtime.Dungeon.Position.Parent
+		or not Runtime.Dungeon.Orientation
+		or not Runtime.Dungeon.Orientation.Parent then
+
+		Runtime.Dungeon.createFollow()
+	end
+
+	if not Runtime.Dungeon.Target
+		or not Runtime.Dungeon.isAlive(
+			Runtime.Dungeon.Target
+		) then
+
+		if os.clock()
+			< Runtime.Dungeon.NextTargetSearch then
+
+			return
+		end
+
+		Runtime.Dungeon.NextTargetSearch =
+			os.clock()
+			+ Runtime.Dungeon.TargetSearchInterval
+
+		local nextMob =
+			Runtime.Dungeon.findNearestAlive()
+
+		if nextMob then
+
+			Runtime.Dungeon.switchTarget(
+				nextMob
+			)
+
+		else
+
+			Runtime.Dungeon.Target =
+				nil
+		end
+
+		return
+	end
+
+	if Runtime.Dungeon.BringMob then
+
+		if not Runtime.Dungeon.BringAnchor then
+			Runtime.Dungeon.BringAnchor =
+				playerRoot.CFrame
+		end
+
+		local anchorPosition =
+			Runtime.Dungeon.BringAnchor.Position
+			+ Vector3.new(
+				0,
+				Runtime.Dungeon.HeightOffset,
+				0
+			)
+
+		if Runtime.Dungeon.Position then
+
+			Runtime.Dungeon.Position.Position =
+				anchorPosition
+		end
+
+	else
+
+		Runtime.Dungeon.BringAnchor =
+			nil
+
+		local targetPosition =
+			Runtime.Dungeon.getNormalTargetPosition()
+
+		if not targetPosition then
+
+			Runtime.Dungeon.Target =
+				nil
+
+			return
+		end
+
+		if not Runtime.Dungeon.ComboDodging
+			and (
+				playerRoot.Position
+					- targetPosition
+			).Magnitude
+				>= Runtime.Dungeon.SnapDistance then
+
+			Runtime.Dungeon.snapCharacter(
+				targetPosition
+			)
+		end
+
+		if Runtime.Dungeon.Position then
+
+			Runtime.Dungeon.Position.Position =
+				targetPosition
+		end
+	end
+
+	local humanoid =
+		getCharacterHumanoid()
+
+	if humanoid then
+		humanoid.AutoRotate =
+			false
+	end
+
+	Runtime.Dungeon.updateBring()
+	Runtime.Dungeon.updateComboDodge()
+end
+
+runtimeConnect(
+	workspace.DescendantAdded,
+	function(object)
+
+		if object.Name
+			== Runtime.Dungeon.MarkerName then
+
+			Runtime.Dungeon.registerMarker(
+				object
+			)
+		end
+	end
+)
+
+
+runtimeConnect(
+	game:GetService("RunService").Heartbeat,
+	function()
+		Runtime.Dungeon.updateFollow()
+	end
+)
+
+
+runtimeConnect(
+	LocalPlayer.CharacterAdded,
+	function()
+
+		Runtime.Dungeon.destroyFollow()
+		Runtime.Dungeon.Target = nil
+		Runtime.Dungeon.NextTargetSearch = 0
+		Runtime.Dungeon.BringAnchor = nil
+		Runtime.Dungeon.HeightOffset = 0
+		Runtime.Dungeon.ComboDodging = false
+
+		local combo =
+			Runtime.Dungeon.getLastCombo()
+
+		Runtime.Dungeon.ComboFiveArmed =
+			combo ~= 5
+	end
+)
+
+
+task.spawn(function()
+	while Runtime.alive do
+
+		if Runtime.Dungeon.canRun()
+			and Runtime.Dungeon.Target
+			and Runtime.Dungeon.isAlive(
+				Runtime.Dungeon.Target
+			) then
+
+			local now =
+				os.clock()
+
+			if now
+				>= Runtime.Dungeon.NextAttack then
+
+				Runtime.Dungeon.NextAttack =
+					now
+					+ ATTACK_INTERVAL
+
+				attackOnce()
+			end
+
+			if #selectedAutoSkillKeys > 0
+				and now
+					>= Runtime.Dungeon.NextSkill then
+
+				Runtime.Dungeon.NextSkill =
+					now
+					+ AUTO_SKILL_INTERVAL
+
+				useAutoSkill()
+			end
+
+		else
+
+			Runtime.Dungeon.NextAttack =
+				0
+
+			Runtime.Dungeon.NextSkill =
+				0
+		end
+
+		task.wait(0.03)
+	end
+end)
 
 
 local function runWeaponMasteryBurst(
@@ -8606,6 +9743,7 @@ function Runtime.PlayerGuard.pause()
 
 	Runtime.PlayerGuard.Snapshot = {
 		Farm = farmEnabled,
+		Dungeon = Runtime.Dungeon.Enabled,
 		AutoCrow = autoCrowQuestEnabled,
 		WeaponMastery = weaponMasteryFarmEnabled,
 		AutoDelivery = autoDeliveryEnabled,
@@ -8617,6 +9755,10 @@ function Runtime.PlayerGuard.pause()
 	}
 
 	setFarmEnabled(
+		false
+	)
+
+	Runtime.Dungeon.setEnabled(
 		false
 	)
 
@@ -8717,6 +9859,10 @@ function Runtime.PlayerGuard.resume()
 		snapshot.Farm == true
 	)
 
+	Runtime.Dungeon.setEnabled(
+		snapshot.Dungeon == true
+	)
+
 	Runtime.PlayerGuard.notify(
 		"Farm resumed: "
 		.. tostring(
@@ -8738,6 +9884,10 @@ function Runtime.PlayerGuard.enforcePaused()
 
 	if farmEnabled then
 		setFarmEnabled(false)
+	end
+
+	if Runtime.Dungeon.Enabled then
+		Runtime.Dungeon.setEnabled(false)
 	end
 
 	if autoDeliveryEnabled then
@@ -9428,6 +10578,11 @@ local function initUI()
 				Icon = "target"
 			}),
 
+			Dungeon = Window:AddTab({
+				Title = "Auto Dungeon",
+				Icon = "swords"
+			}),
+
 			Misc = Window:AddTab({
 				Title = "Misc",
 				Icon = "settings"
@@ -9443,6 +10598,34 @@ local function initUI()
 				Icon = "settings"
 			})
 		}
+
+
+		Tabs.Dungeon:AddToggle(
+			"AutoDungeonToggle",
+			{
+				Title = "Auto Dungeon",
+				Default = false,
+				Callback = function(value)
+					Runtime.Dungeon.setEnabled(
+						value
+					)
+				end
+			}
+		)
+
+
+		Tabs.Dungeon:AddToggle(
+			"AutoDungeonBringMob",
+			{
+				Title = "Bring Mob",
+				Default = false,
+				Callback = function(value)
+					Runtime.Dungeon.setBringMob(
+						value
+					)
+				end
+			}
+		)
 
 
 		farmSwitch =
