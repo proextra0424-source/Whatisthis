@@ -632,76 +632,262 @@ end
             local OneShot_Active = false
             local OneShot_RunId = 0
             local AutoBRExtreme_Active = false
-            local OneShot_ExtremePending = setmetatable({}, {__mode = "k"})
+            local OneShot_Recovery = nil
 
             local function OneShotMode(state)
                 OneShot_RunId = OneShot_RunId + 1
                 OneShot_Active = state
+                if OneShot_Recovery then
+                    OneShot_Recovery.cleanup()
+                end
 
                 if not state then
                     return
                 end
 
                 local runId = OneShot_RunId
-                local namegu = Game.Players.LocalPlayer.Name
-                local targetNPCs = {
-        ["Spec"] = true, ["Doyle"] = true, ["Pickle"] = true,
-        ["Kiyosumi Kato"] = true, ["KiryuKazuma"] = true, ["Yasha Ape Jr."] = true,
-        ["Headless One"] = true, ["Musashi"] = true, ["Raian"] = true,
-        ["Armstrong"] = true, ["Jason Voorhees"] = true, ["Jetstream Sam"] = true,
-        ["AdamSmasher"] = true, ["Retsu"] = true, ["Yanagi"] = true,
-        ["Predator"] = true, ["Leatherface"] = true, ["Slayer"] = true,
-        ["Dorian"] = true, ["The Protagonist"] = true,
-        ["Goro Majima, Mad Dog of Shimano"] = true,
-        ["Sukune"] = true, ["Sikorsky"] = true, ["DungeonNPC"] = true,
-        ["BossNPC"] = true, ["Starrk"] = true, ["Awano"] = true, ["Ichiban"] = true,
-        ["Mr. Shakedown"] = true, ["Yakuza"] = true, ["Jack"] = true, ["Kureha"] = true,
-        ["Gouki"] = true, ["Koushou"] = true, ["Sukune"] = true, ["Chiharu"] = true,
-        ["Yujiro Hanma (20% Power)"] = true, ["Pirate"] = true, ["Fireleton"] = true,
-        ["The First Yasha Ape"] = true, ["Yeti"] = true, ["Skeleton"] = true, ["Jolly Skeleton"] = true,
-        ["Captain Majima"] = true, ["Radahn, Consort of Miquella"] = true, ["Military"] = true, ["SWAT"] = true,
-        ["Akira Nishikiyama"] = true, ["Megumi Fushigoro"] = true, ["Sukuna"] = true, ["Naoya Zenin"] = true,
-        ["Yasha Ape"] = true, ["Hanma Yujiro"] = true, ["Hanma Baki"] = true, ["Doomfist"] = true,
-        ["Yasha Ape Sr."] = true, ["First Yasha Ape"] = true, ["Jiren"] = true, ["Broly"] = true,
-        ["Sane Man"] = true, ["Go Todoroki"] = true, [namegu .. " Musashi"] = true, ["Kokushibo"] = true,
-        ["Terminator"] = true, ["Motobe"] = true, ["Ali Jr."] = true, ["Elf"] = true, ["Jogoat (Full Power)"] = true,
-                }
+                -- Pending work belongs to this run; an old task must not clear a new run's entry.
+                local oneShotPending = setmetatable({}, {__mode = "k"})
+                local zeroHealthTargets = setmetatable({}, {__mode = "k"})
+                local RECOVERY_RANGE = 100
+                local RECOVERY_GRACE = 2
+                local RECOVERY_DURATION = 10
+                local RECOVERY_SKILL_COOLDOWN = 5
 
-                spawn(function()
+                local function getAutoOneShotModel(humanoid)
+                    local gameFolder = workspace:FindFirstChild("Game")
+                    local npcFolder = gameFolder and gameFolder:FindFirstChild("Players")
+                    if not npcFolder or not humanoid:IsDescendantOf(npcFolder) then
+                        return nil
+                    end
+
+                    local model = nil
+                    local current = humanoid.Parent
+                    while current and current ~= npcFolder do
+                        if current:IsA("Model") then
+                            if current == LocalPlayer.Character or Players:GetPlayerFromCharacter(current) then
+                                return nil
+                            end
+                            model = model or current
+                        end
+                        current = current.Parent
+                    end
+
+                    return model
+                end
+
+                local function getOneShotRootPart(humanoid)
+                    local model = getAutoOneShotModel(humanoid)
+                    if not model then return nil end
+                    local root = humanoid.RootPart or model:FindFirstChild("HumanoidRootPart")
+                    if root and root:IsA("BasePart") and root:IsDescendantOf(model) then
+                        return root
+                    end
+                    return nil
+                end
+
+                local function tryOneShotHumanoid(humanoid)
+                    if not OneShot_Active or OneShot_RunId ~= runId
+                        or not humanoid.Parent or humanoid.Health <= 0 then
+                        return false
+                    end
+                    -- Revalidate the same NPC after any delay, without requiring network ownership.
+                    if not getAutoOneShotModel(humanoid) then return false end
+                    humanoid.Health = 0
+                    return true
+                end
+
+                local function observeZeroHealthTarget(humanoid, root, playerRoot, now)
+                    if not root or not playerRoot or humanoid.Health > 0
+                        or (root.Position - playerRoot.Position).Magnitude > RECOVERY_RANGE then
+                        zeroHealthTargets[humanoid] = nil
+                        return nil
+                    end
+
+                    local observation = zeroHealthTargets[humanoid]
+                    if not observation or observation.root ~= root then
+                        observation = {
+                            root = root, zeroSince = now, sampledAt = now,
+                            position = root.Position, lastMovedAt = nil, attempted = false
+                        }
+                        zeroHealthTargets[humanoid] = observation
+                    end
+                    if now - observation.sampledAt >= 0.5 then
+                        local delta = root.Position - observation.position
+                        -- Dead-state and MoveDirection are unreliable for these broken NPCs.
+                        -- Use actual horizontal displacement, not falling or a single velocity read.
+                        if Vector3.new(delta.X, 0, delta.Z).Magnitude >= 0.5 then
+                            observation.lastMovedAt = now
+                        end
+                        observation.position = root.Position
+                        observation.sampledAt = now
+                    end
+                    if not observation.attempted and now - observation.zeroSince >= RECOVERY_GRACE
+                        and observation.lastMovedAt and now - observation.lastMovedAt <= 0.75 then
+                        return observation
+                    end
+                    return nil
+                end
+
+                local function recoverMovingZeroHealthTarget(targetHumanoid, observation)
+                    if OneShot_Recovery or not OneShot_Active or OneShot_RunId ~= runId then return end
+                    local character = LocalPlayer.Character
+                    local playerHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+                    local playerRoot = character and character:FindFirstChild("HumanoidRootPart")
+                    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                    local clientToServer = remotes and remotes:FindFirstChild("ClientToServer")
+                    local skillRemote = clientToServer and clientToServer:FindFirstChild("Skill")
+                    if not playerRoot or not playerHumanoid or playerHumanoid.Health <= 0
+                        or not skillRemote or not skillRemote:IsA("RemoteEvent") then return end
+
+                    observation.attempted = true
+                    local targetRoot = observation.root
+                    local returnCFrame = playerRoot.CFrame
+                    local previousAutoRotate = playerHumanoid.AutoRotate
+                    local attachment, alignPosition, alignOrientation
+                    local recovery = {target = targetHumanoid}
+                    local cleaned = false
+
+                    local function cleanup()
+                        if cleaned then return end
+                        cleaned = true
+                        if alignOrientation then alignOrientation:Destroy() end
+                        if alignPosition then alignPosition:Destroy() end
+                        if attachment then attachment:Destroy() end
+                        if LocalPlayer.Character == character and playerHumanoid.Parent then
+                            playerHumanoid.AutoRotate = previousAutoRotate
+                            if playerHumanoid.Health > 0 and playerRoot.Parent then
+                                playerRoot.CFrame = returnCFrame
+                            end
+                        end
+                        if OneShot_Recovery == recovery then OneShot_Recovery = nil end
+                    end
+                    recovery.cleanup = cleanup
+                    OneShot_Recovery = recovery
+
+                    task.spawn(function()
+                        local ok, err = xpcall(function()
+                            if cleaned or not targetRoot.Parent or not playerRoot.Parent then return end
+                            local hoverPosition = targetRoot.Position + Vector3.new(0, 10, 0)
+                            -- Supply a non-parallel up vector when looking vertically downward.
+                            local hoverCFrame = CFrame.lookAt(hoverPosition, targetRoot.Position, Vector3.zAxis)
+                            playerHumanoid.AutoRotate = false
+                            attachment = Instance.new("Attachment")
+                            attachment.Name = "OneShotRecoveryAttachment"
+                            attachment.Parent = playerRoot
+                            alignPosition = Instance.new("AlignPosition")
+                            alignPosition.Mode = Enum.PositionAlignmentMode.OneAttachment
+                            alignPosition.Attachment0 = attachment
+                            alignPosition.ApplyAtCenterOfMass = true
+                            alignPosition.MaxForce = math.max(playerRoot.AssemblyMass * workspace.Gravity * 20, 50000)
+                            alignPosition.MaxVelocity = 200
+                            alignPosition.Responsiveness = 100
+                            alignPosition.Position = hoverPosition
+                            alignPosition.Parent = playerRoot
+                            alignOrientation = Instance.new("AlignOrientation")
+                            alignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+                            alignOrientation.Attachment0 = attachment
+                            alignOrientation.MaxTorque = 100000
+                            alignOrientation.MaxAngularVelocity = 50
+                            alignOrientation.Responsiveness = 100
+                            alignOrientation.CFrame = hoverCFrame
+                            alignOrientation.Parent = playerRoot
+                            playerRoot.CFrame = hoverCFrame
+                            playerRoot.AssemblyLinearVelocity = Vector3.zero
+                            playerRoot.AssemblyAngularVelocity = Vector3.zero
+
+                            local startedAt = os.clock()
+                            local lastMovedAt = startedAt
+                            local lastPosition = targetRoot.Position
+                            local nextSkillAt = startedAt + 0.25
+                            while not cleaned and OneShot_Active and OneShot_RunId == runId
+                                and LocalPlayer.Character == character and playerHumanoid.Health > 0
+                                and playerRoot.Parent and targetHumanoid.Parent and targetHumanoid.Health <= 0
+                                and getOneShotRootPart(targetHumanoid) == targetRoot do
+                                local now = os.clock()
+                                if now - startedAt >= RECOVERY_DURATION
+                                    or (targetRoot.Position - playerRoot.Position).Magnitude > RECOVERY_RANGE then break end
+                                local delta = targetRoot.Position - lastPosition
+                                if Vector3.new(delta.X, 0, delta.Z).Magnitude >= 0.5 then
+                                    lastMovedAt = now
+                                    lastPosition = targetRoot.Position
+                                end
+                                if now - lastMovedAt >= 2.5 then break end
+                                hoverPosition = targetRoot.Position + Vector3.new(0, 10, 0)
+                                alignPosition.Position = hoverPosition
+                                alignOrientation.CFrame = CFrame.lookAt(hoverPosition, targetRoot.Position, Vector3.zAxis)
+                                if now >= nextSkillAt and (playerRoot.Position - hoverPosition).Magnitude <= 2 then
+                                    skillRemote:FireServer("Sekiro Mortal Blade")
+                                    nextSkillAt = now + RECOVERY_SKILL_COOLDOWN
+                                end
+                                RunService.Heartbeat:Wait()
+                            end
+                        end, debug.traceback)
+                        cleanup()
+                        if not ok then warn("One Shot recovery: " .. tostring(err)) end
+                    end)
+                end
+
+                task.spawn(function()
                     while OneShot_Active and OneShot_RunId == runId do
-                        wait(0.1)
+                        task.wait(0.1)
                         if not OneShot_Active or OneShot_RunId ~= runId then
                             break
                         end
 
-                        sethiddenproperty(LocalPlayer, "SimulationRadius", 100)
-                        sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 100)
+                        if type(sethiddenproperty) == "function" then
+                            pcall(function()
+                                sethiddenproperty(LocalPlayer, "SimulationRadius", 100)
+                                sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 100)
+                            end)
+                        end
 
-                        for _, npc in pairs(workspace.Game.Players:GetDescendants()) do
+                        local gameFolder = workspace:FindFirstChild("Game")
+                        local npcFolder = gameFolder and gameFolder:FindFirstChild("Players")
+                        if not npcFolder then
+                            task.wait(0.1)
+                            continue
+                        end
+
+                        local character = LocalPlayer.Character
+                        local playerRoot = character and character:FindFirstChild("HumanoidRootPart")
+                        local recoveryTarget, recoveryObservation
+                        local recoveryDistance = RECOVERY_RANGE
+                        for _, npc in ipairs(npcFolder:GetDescendants()) do
                             if not OneShot_Active or OneShot_RunId ~= runId then
                                 break
                             end
-                            if npc:IsA("Humanoid") and npc.Parent and targetNPCs[npc.Parent.Name] then
+                            if npc:IsA("Humanoid") and npc.Health <= 0 then
+                                local root = getOneShotRootPart(npc)
+                                local observation = observeZeroHealthTarget(npc, root, playerRoot, os.clock())
+                                if observation then
+                                    local distance = (root.Position - playerRoot.Position).Magnitude
+                                    if distance <= recoveryDistance then
+                                        recoveryTarget, recoveryObservation = npc, observation
+                                        recoveryDistance = distance
+                                    end
+                                end
+                            elseif npc:IsA("Humanoid") and npc.Health > 0
+                                and getAutoOneShotModel(npc) then
+                                zeroHealthTargets[npc] = nil
                                 if AutoBRExtreme_Active or AutoIsland_Active then
-                                    if not OneShot_ExtremePending[npc] then
+                                    if not oneShotPending[npc] then
                                         local targetHumanoid = npc
                                         local oneShotDelay = AutoBRExtreme_Active and 1 or 3
-                                        OneShot_ExtremePending[targetHumanoid] = true
+                                        oneShotPending[targetHumanoid] = true
                                         task.spawn(function()
                                             task.wait(oneShotDelay)
-                                            if OneShot_Active
-                                                and OneShot_RunId == runId
-                                                and targetHumanoid.Parent
-                                                and targetNPCs[targetHumanoid.Parent.Name] then
-                                                targetHumanoid.Health = 0
-                                            end
-                                            OneShot_ExtremePending[targetHumanoid] = nil
+                                            tryOneShotHumanoid(targetHumanoid)
+                                            oneShotPending[targetHumanoid] = nil
                                         end)
                                     end
                                 else
-                                    npc.Health = 0
+                                    tryOneShotHumanoid(npc)
                                 end
                             end
+                        end
+                        if recoveryTarget and not OneShot_Recovery then
+                            recoverMovingZeroHealthTarget(recoveryTarget, recoveryObservation)
                         end
                     end
                 end)
@@ -2654,6 +2840,10 @@ end
                 hasTeleportedIsland = false
 
                 local function waitForHRP()
+                    -- Let One Shot finish its skill recovery before an Island waypoint teleport.
+                    while OneShot_Recovery and AutoIsland_Active and AutoIsland_RunId == runId do
+                        task.wait(0.1)
+                    end
                     local char = LocalPlayer.Character
                     if not char then
                         char = LocalPlayer.CharacterAdded:Wait()
@@ -3675,6 +3865,8 @@ end
                                 local character = LocalPlayer.Character
                                 local rootPart = character and character:FindFirstChild("HumanoidRootPart")
                                 if rootPart then
+                                    -- The Extreme marker mechanic takes priority over NPC recovery.
+                                    if OneShot_Recovery then OneShot_Recovery.cleanup() end
                                     rootPart.CFrame = currentPart.CFrame
                                 end
 
