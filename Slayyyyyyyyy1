@@ -3975,7 +3975,7 @@ end
                     local virtualInput = deps.VirtualInputManager
                     local taskApi = deps.task or task
                     local config = {
-                        offset = 20, position = "Above/Below", autoPunch = true,
+                        offset = 20, position = "Above/Below", autoPunch = false,
                         punchSpeed = 0.2, punchType = "Normal",
                     }
                     local enabled, destroyed = false, false
@@ -3988,6 +3988,22 @@ end
                     local selectedSkills = {}
                     local allowedSkills = { Z = true, X = true, C = true, V = true, B = true, N = true, G = true, J = true }
                     local warnedMissingRemote = false
+                    local punchReason, punchSent, lastPunchTarget = "off", 0, nil
+                    local reportedPunchReason, reportedPunchSent
+                
+                    function controller:GetPunchStatus()
+                        return { enabled = config.autoPunch, reason = punchReason, sent = punchSent, target = lastPunchTarget }
+                    end
+                
+                    local function reportPunch(reason)
+                        punchReason = reason
+                        if reportedPunchReason == reason and reportedPunchSent == punchSent then return end
+                        reportedPunchReason, reportedPunchSent = reason, punchSent
+                        if deps.onPunchStatusChanged then
+                            local ok, err = pcall(deps.onPunchStatusChanged, controller:GetPunchStatus())
+                            if not ok and deps.warn then deps.warn("Auto Punch status: " .. tostring(err)) end
+                        end
+                    end
                 
                     local function announce(state, reason)
                         if deps.onEnabledChanged then
@@ -4055,7 +4071,7 @@ end
                 
                     local function attackLoop(runId)
                         local function running()
-                            return enabled and not destroyed and config.autoPunch and attackRunId == runId
+                            return not destroyed and config.autoPunch and attackRunId == runId
                         end
                         -- Keep the scan/cadence, but use Project Baki's working Imagination combat packet.
                         while running() do
@@ -4064,9 +4080,11 @@ end
                             local character, _, root = localCharacter()
                             local folder = npcFolder()
                             if character and folder then
+                                local sentBefore = punchSent
+                                local blockedRemote = false
                                 for _, model in pairs(folder:GetChildren()) do
                                     if not running() then return end
-                                    if model:FindFirstChild("HumanoidRootPart") and model.Name ~= localPlayer.Name then
+                                    if model ~= character and model:FindFirstChild("HumanoidRootPart") and model.Name ~= localPlayer.Name then
                                         local currentCharacter, _, currentRoot = localCharacter()
                                         local humanoid = model:FindFirstChild("Humanoid")
                                         local enemyRoot = model:FindFirstChild("HumanoidRootPart")
@@ -4075,7 +4093,8 @@ end
                                             local remotes = storage:FindFirstChild("Remotes")
                                             local clientToServer = remotes and remotes:FindFirstChild("ClientToServer")
                                             local remote = clientToServer and clientToServer:FindFirstChild("BasicCombat")
-                                            if remote and remote:IsA("RemoteEvent") then
+                                            if remote and (remote:IsA("RemoteEvent") or remote:IsA("UnreliableRemoteEvent")) then
+                                                warnedMissingRemote = false
                                                 for combo = 1, 5 do
                                                     -- Cancel old work on stop/respawn instead of leaking a combo.
                                                     if not running() or localPlayer.Character ~= currentCharacter then return end
@@ -4083,28 +4102,41 @@ end
                                                         "Light Punchy", combo, humanoid,
                                                         nil, nil, config.punchType ~= "Normal", false
                                                     )
+                                                    punchSent = punchSent + 1
+                                                    lastPunchTarget = model.Name
+                                                    reportPunch("sent")
                                                     taskApi.wait(config.punchSpeed)
                                                 end
-                                            elseif not warnedMissingRemote then
-                                                warnedMissingRemote = true
-                                                if deps.warn then deps.warn("Auto Farm Near: BasicCombat remote was not found; auto punch is waiting.") end
+                                            else
+                                                blockedRemote = true
+                                                reportPunch(remote and "unsupported_remote" or "missing_remote")
+                                                if not warnedMissingRemote then
+                                                    warnedMissingRemote = true
+                                                    if deps.warn then deps.warn("Auto Punch: BasicCombat is missing or has an unsupported class.") end
+                                                end
                                             end
                                         end
                                     end
                                 end
+                                if punchSent == sentBefore and not blockedRemote then reportPunch("waiting_target") end
+                            else
+                                reportPunch(character and "missing_folder" or "waiting_character")
                             end
                         end
                     end
                 
                     local function startAttack()
-                        if attackTask or not enabled or destroyed or not config.autoPunch then return end
+                        if attackTask or destroyed or not config.autoPunch then return end
                         attackRunId = attackRunId + 1
                         local runId = attackRunId
                         attackTask = taskApi.spawn(function()
                             local ok, err = pcall(attackLoop, runId)
                             if attackRunId == runId then
                                 attackTask = nil
-                                if not ok then controller:SetEnabled(false, "Auto Punch stopped: " .. tostring(err)) end
+                                if not ok then
+                                    controller:SetAutoPunch(false, "Auto Punch stopped: " .. tostring(err))
+                                    reportPunch("error")
+                                end
                             end
                         end)
                     end
@@ -4207,7 +4239,6 @@ end
                             controller:SetEnabled(false, "Another farm mode is active. Disable it before using Auto Farm Near.")
                             return
                         end
-                        startAttack()
                         local character, _, root = localCharacter()
                         if not character or root.Anchored then clearTarget(); clearBinding(); scanModels = nil; return end
                         bindCharacter(root)
@@ -4235,7 +4266,6 @@ end
                             return
                         end
                         enabled = state
-                        stopAttack()
                         if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
                         clearTarget()
                         clearBinding()
@@ -4245,9 +4275,24 @@ end
                                 local ok, err = pcall(step)
                                 if not ok then controller:SetEnabled(false, "Auto Farm Near stopped: " .. tostring(err)) end
                             end)
-                            startAttack()
                         end
                         announce(enabled, reason)
+                    end
+                
+                    function controller:SetAutoPunch(state, reason)
+                        if destroyed then return false end
+                        state = state == true
+                        if state == config.autoPunch then return true end
+                        config.autoPunch = state
+                        stopAttack()
+                        reportPunch(state and "waiting_target" or "off")
+                        if state then startAttack() end
+                        if deps.onPunchEnabledChanged then
+                            local ok, err = pcall(deps.onPunchEnabledChanged, state, reason)
+                            if not ok and deps.warn then deps.warn("Auto Punch: " .. tostring(err)) end
+                        end
+                        if reason and deps.warn then deps.warn(reason) end
+                        return true
                     end
                 
                     function controller:SetConfig(key, value)
@@ -4267,8 +4312,7 @@ end
                             if value ~= "Normal" and value ~= "Slam" then return false end
                             config.punchType = value
                         elseif key == "autoPunch" and type(value) == "boolean" then
-                            config.autoPunch = value
-                            if value then startAttack() else stopAttack() end
+                            return controller:SetAutoPunch(value)
                         else
                             return false
                         end
@@ -4310,6 +4354,7 @@ end
                         end
                         controller:SetEnabled(false)
                         controller:SetAutoSkill(false)
+                        controller:SetAutoPunch(false)
                         stopAttack()
                         stopSkill()
                         destroyed = true
@@ -4324,6 +4369,7 @@ end
                         clearBinding()
                         scanModels, scanFolder = nil, nil
                         stopSkill()
+                        startAttack()
                         startSkill()
                     end)
                     return controller
@@ -4551,7 +4597,7 @@ end
                     pcall(function() library:ShowNotification(message) end)
                 end
                 
-                local nearSwitch, autoSkillSwitch
+                local nearSwitch, autoSkillSwitch, nearPunchSwitch, punchStatusLabel
                 local nearDependencies = {
                     Players = Players,
                     LocalPlayer = LocalPlayer,
@@ -4561,6 +4607,25 @@ end
                     VirtualInputManager = VirtualInputManager,
                     Game = game,
                     warn = warn,
+                    onPunchEnabledChanged = function(state, reason)
+                        if not state and nearPunchSwitch then nearPunchSwitch:Set(false) end
+                        if reason then notifyNearFarm(reason) end
+                    end,
+                    onPunchStatusChanged = function(status)
+                        if not punchStatusLabel then return end
+                        local messages = {
+                            off = "Auto Punch: Off",
+                            waiting_target = "Auto Punch: waiting for target within 21 studs",
+                            waiting_character = "Auto Punch: waiting for your character",
+                            missing_folder = "Auto Punch: Game.Players folder not found",
+                            missing_remote = "Auto Punch: BasicCombat not found",
+                            unsupported_remote = "Auto Punch: BasicCombat class is unsupported",
+                            error = "Auto Punch: stopped after an error (check console)",
+                        }
+                        punchStatusLabel.Text = status.reason == "sent"
+                            and ("Auto Punch: sent " .. status.sent .. " -> " .. tostring(status.target))
+                            or messages[status.reason] or "Auto Punch: waiting"
+                    end,
                     isSkillAllowed = function()
                         if (AutoBR_Active or AutoBRExtreme_Active) and OneShot_Active then
                             return BossRushRecovery ~= nil and BossRushRecovery:CanUseSkills()
@@ -4625,9 +4690,15 @@ end
                         notifyNearFarm("Near Farm Distance: enter a number from -20 to 20.")
                     end
                 end)
-                autoFarmTab:AddSwitch("Near Auto Punch (Project Baki)", function(state)
-                    nearController:SetConfig("autoPunch", state)
-                end):Set(true)
+                nearPunchSwitch = autoFarmTab:AddSwitch("Auto Punch Near (Independent)", function(state)
+                    nearController:SetAutoPunch(state)
+                end)
+                nearPunchSwitch:Set(false)
+                punchStatusLabel = autoFarmTab:AddLabel("Auto Punch: Off")
+                punchStatusLabel.Size = UDim2.new(1, 0, 0, 36)
+                punchStatusLabel.TextWrapped = true
+                punchStatusLabel.TextSize = 12
+                punchStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
                 local nearPunchSpeed = autoFarmTab:AddDropdown("Near Punch Speed (default 0.2)", function(value)
                     nearController:SetConfig("punchSpeed", value)
                 end)
