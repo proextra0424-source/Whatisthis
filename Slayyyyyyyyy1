@@ -2878,48 +2878,57 @@ end
                 end
             end
 
+            -- The normal route owns one cancellable worker, including its delayed start request.
             local AutoBR_Active = false
-            local hasTeleported = false
-
+            local AutoBR_RunId = 0
+            local AutoBR_Task
+            
             local function AutoBR(state)
-                AutoBR_Active = state
-
-                local function StartAutoBR()
-                    local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-                    local spireBox = workspace:FindFirstChild("SpireBox")
-                    
-                    if spireBox and character:FindFirstChild("HumanoidRootPart") then
-                        if not hasTeleported then
-                            character.HumanoidRootPart.CFrame = CFrame.new(1, 3012, 605)
-                            hasTeleported = true
-                        end
-                        
-                        local args = {
-                            [1] = "Spire",
-                            [2] = "Spire",
-                            [3] = spireBox
-                        }
-                        wait(1)
-                        ReplicatedStorage.Remotes.ClientToServer.BossStart:FireServer(unpack(args))
-                    end
-                end
-
-                local function CheckAndRestartBR()
-                    while AutoBR_Active do
+                AutoBR_RunId = AutoBR_RunId + 1
+                AutoBR_Active = state == true
+                local runId = AutoBR_RunId
+                local previous = AutoBR_Task
+                AutoBR_Task = nil
+                if previous and previous ~= coroutine.running() then pcall(task.cancel, previous) end
+                if not AutoBR_Active then return end
+            
+                AutoBR_Task = task.spawn(function()
+                    local teleportedCharacter
+                    local function running() return AutoBR_Active and AutoBR_RunId == runId end
+                    while running() do
                         if not workspace:FindFirstChild("Spire") then
-                            StartAutoBR()
+                            local character = LocalPlayer.Character
+                            local root = character and character:FindFirstChild("HumanoidRootPart")
+                            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                            local spireBox = workspace:FindFirstChild("SpireBox")
+                            if root and humanoid and humanoid.Health > 0 and spireBox then
+                                if teleportedCharacter ~= character then
+                                    root.CFrame = CFrame.new(1, 3012, 605)
+                                    teleportedCharacter = character
+                                end
+                                task.wait(1)
+                                if running() and LocalPlayer.Character == character and root.Parent
+                                    and character:FindFirstChild("HumanoidRootPart") == root
+                                    and humanoid.Health > 0 and workspace:FindFirstChild("SpireBox") == spireBox
+                                    and not workspace:FindFirstChild("Spire") then
+                                    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                                    local clientToServer = remotes and remotes:FindFirstChild("ClientToServer")
+                                    local remote = clientToServer and clientToServer:FindFirstChild("BossStart")
+                                    if remote then
+                                        local ok, err = pcall(function() remote:FireServer("Spire", "Spire", spireBox) end)
+                                        if not ok then warn("Auto Boss Rush: " .. tostring(err)) end
+                                    end
+                                end
+                            end
                         end
-                        wait(5)
+                        if not running() then break end
+                        task.wait(5)
                     end
-                end
-
-                if AutoBR_Active then
-                    hasTeleported = false
-                    StartAutoBR()
-                    spawn(CheckAndRestartBR)
-                end
+                    if AutoBR_RunId == runId then AutoBR_Task = nil end
+                end)
             end
-
+            
+            
             local AutoBRPunch_Active = false
             local AutoBRPunch_RunId = 0
             local hasTeleportedBRPunch = false
@@ -3316,7 +3325,7 @@ end
                     end
                 end
 
-                StartAutoBRExtreme()
+                if not workspace:FindFirstChild("Spire") then StartAutoBRExtreme() end
                 spawn(CheckAndRestartBRExtreme)
                 spawn(FollowExtremeMortarMarkers)
             end
@@ -3950,17 +3959,123 @@ end
                 TextXAlignment = Enum.TextXAlignment.Center
             })
 
-            autoFarmTab:AddSwitch("Auto Boss Rush", function(state)
-                AutoBR(state)
-            end):Set(false)
-
-            autoFarmTab:AddSwitch("Auto Boss Rush Punch", function(state)
-                AutoBRPunch(state)
-            end):Set(false)
-
-            autoFarmTab:AddSwitch("Auto Boss Rush Extreme", function(state)
-                AutoBRExtreme(state)
-            end):Set(false)
+            do
+                -- One switch owns the selected Normal/Extreme route and cancels stale starts.
+                local function createBossRushModeController(deps)
+                    local controller = {}
+                    local taskApi = deps.task or task
+                    local enabled, destroyed, mode = false, false, "Normal"
+                    local generation, startTask = 0, nil
+                
+                    local function notify(reason)
+                        if deps.onChanged then
+                            local ok, err = pcall(deps.onChanged, enabled, mode, reason)
+                            if not ok and deps.warn then deps.warn(tostring(err)) end
+                        end
+                    end
+                
+                    local function stopRoutes()
+                        deps.normal(false)
+                        deps.extreme(false)
+                        if deps.stopPunch then deps.stopPunch() end
+                    end
+                
+                    local function apply()
+                        generation = generation + 1
+                        local currentGeneration = generation
+                        local previous = startTask
+                        startTask = nil
+                        if previous and previous ~= coroutine.running() then pcall(taskApi.cancel, previous) end
+                        stopRoutes()
+                        if not enabled or destroyed then return end
+                        local selectedMode = mode
+                        startTask = taskApi.spawn(function()
+                            if destroyed or not enabled or generation ~= currentGeneration then return end
+                            local route = selectedMode == "Extreme" and deps.extreme or deps.normal
+                            local ok, err = pcall(route, true)
+                            if generation == currentGeneration then
+                                startTask = nil
+                                if not ok then
+                                    enabled = false
+                                    stopRoutes()
+                                    if deps.warn then deps.warn("Auto Boss Rush: " .. tostring(err)) end
+                                    notify("Auto Boss Rush stopped: " .. tostring(err))
+                                end
+                            end
+                        end)
+                        if coroutine.status(startTask) == "dead" then startTask = nil end
+                    end
+                
+                    function controller:SetEnabled(state)
+                        if destroyed then return false end
+                        state = state == true
+                        if state == enabled then return true end
+                        enabled = state
+                        notify()
+                        apply()
+                        return true
+                    end
+                
+                    function controller:SetMode(value)
+                        if destroyed or (value ~= "Normal" and value ~= "Extreme") then return false end
+                        if value == mode then return true end
+                        mode = value
+                        notify()
+                        if enabled then apply() end
+                        return true
+                    end
+                
+                    function controller:GetMode() return mode end
+                    function controller:IsEnabled() return enabled end
+                    function controller:Destroy()
+                        if destroyed then return end
+                        enabled = false
+                        apply()
+                        destroyed = true
+                        if controller.uiConnection then controller.uiConnection:Disconnect(); controller.uiConnection = nil end
+                    end
+                    return controller
+                end
+                
+                
+                local runtime = getgenv and getgenv() or _G
+                local previousBossRush = runtime.__SigmaBossRush
+                if type(previousBossRush) == "table" and type(previousBossRush.Destroy) == "function" then
+                    pcall(previousBossRush.Destroy, previousBossRush)
+                end
+                
+                local bossRushSwitch
+                local bossRushController = createBossRushModeController({
+                    normal = AutoBR,
+                    extreme = AutoBRExtreme,
+                    stopPunch = function() AutoBRPunch(false) end,
+                    warn = warn,
+                    onChanged = function(state, _, reason)
+                        if not state and bossRushSwitch then bossRushSwitch:Set(false) end
+                        if reason then pcall(function() library:ShowNotification(reason) end) end
+                    end,
+                })
+                runtime.__SigmaBossRush = bossRushController
+                
+                local bossRushMode = autoFarmTab:AddDropdown("Boss Rush Mode (Normal)", function(value)
+                    bossRushController:SetMode(value)
+                end)
+                bossRushMode:Add("Normal")
+                bossRushMode:Add("Extreme")
+                
+                bossRushSwitch = autoFarmTab:AddSwitch("Auto Boss Rush", function(state)
+                    bossRushController:SetEnabled(state)
+                end)
+                bossRushSwitch:Set(false)
+                
+                if window.main_frame and typeof(window.main_frame) == "Instance" then
+                    bossRushController.uiConnection = window.main_frame.Destroying:Connect(function()
+                        bossRushController:Destroy()
+                        if runtime.__SigmaBossRush == bossRushController then runtime.__SigmaBossRush = nil end
+                    end)
+                end
+                
+            end
 
             do
                 -- Client controller for the existing Project Baki script.
@@ -3974,16 +4089,20 @@ end
                     local makeInstance = deps.newInstance or Instance.new
                     local virtualInput = deps.VirtualInputManager
                     local taskApi = deps.task or task
+                    local clock = deps.clock or os.clock
                     local config = {
                         offset = 20, position = "Above/Below", autoPunch = false,
-                        punchSpeed = 0.2, punchType = "Normal",
+                        punchSpeed = 0.2, punchType = "Normal", respawnDelay = 2,
                     }
                     local enabled, destroyed = false, false
                     local heartbeat, removingConnection
                     local target, targetHumanoid, targetRoot
+                    local rememberedTarget, resumeCharacter, resumeReadyAt, retiringCharacter
+                    local resumePending = false
                     local movementRoot, bodyVelocity, wHeld
                     local scanModels, scanIndex, scanFolder = nil, 0, nil
-                    local attackTask, attackRunId = nil, 0
+                    local attackTask, attackRunId, attackFault = nil, 0, false
+                    local externalAttackOwner, externalAttackTarget
                     local skillTask, skillRunId, skillEnabled, heldSkillKey = nil, 0, false, nil
                     local selectedSkills = {}
                     local allowedSkills = { Z = true, X = true, C = true, V = true, B = true, N = true, G = true, J = true }
@@ -3991,8 +4110,20 @@ end
                     local punchReason, punchSent, lastPunchTarget = "off", 0, nil
                     local reportedPunchReason, reportedPunchSent
                 
+                    local function attackRequested() return externalAttackOwner ~= nil or enabled or config.autoPunch end
+                    local function attackMode() return externalAttackOwner and "thor" or (enabled and "farm" or (config.autoPunch and "standalone" or "off")) end
+                    local function waitingPunchReason()
+                        if externalAttackOwner then return "waiting_thor_target" end
+                        if enabled then return resumePending and "waiting_respawn" or "waiting_farm_target" end
+                        return config.autoPunch and "waiting_target" or "off"
+                    end
+                
                     function controller:GetPunchStatus()
-                        return { enabled = config.autoPunch, reason = punchReason, sent = punchSent, target = lastPunchTarget }
+                        return {
+                            enabled = config.autoPunch, active = attackRequested() and not attackFault,
+                            mode = attackMode(),
+                            reason = punchReason, sent = punchSent, target = lastPunchTarget, resuming = resumePending,
+                        }
                     end
                 
                     local function reportPunch(reason)
@@ -4038,6 +4169,7 @@ end
                 
                     local function localCharacter()
                         local character = localPlayer.Character
+                        if character == retiringCharacter then return nil end
                         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
                         local root = character and character:FindFirstChild("HumanoidRootPart")
                         if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
@@ -4062,6 +4194,32 @@ end
                         return gameFolder and gameFolder:FindFirstChild("Players")
                     end
                 
+                    local function rememberForRespawn()
+                        if target then
+                            local humanoid = farmParts(target, npcFolder())
+                            if humanoid and humanoid.Health > 0 then rememberedTarget = target end
+                        end
+                        resumePending = true
+                        resumeCharacter, resumeReadyAt = nil, nil
+                        clearTarget()
+                        clearBinding()
+                        scanModels, scanFolder = nil, nil
+                    end
+                
+                    local function restoreRememberedTarget()
+                        local model = rememberedTarget
+                        rememberedTarget = nil
+                        local folder = npcFolder()
+                        local humanoid, root = farmParts(model, folder)
+                        if not humanoid or humanoid.Health <= 0 then return end
+                        target, targetHumanoid, targetRoot = model, humanoid, root
+                        -- Resume the same model even when the new spawn is outside acquisition range.
+                        scanModels, scanFolder, scanIndex = folder:GetChildren(), folder, 0
+                        for index, candidate in ipairs(scanModels) do
+                            if candidate == model then scanIndex = index; break end
+                        end
+                    end
+                
                     local function stopAttack()
                         attackRunId = attackRunId + 1
                         local oldTask = attackTask
@@ -4069,27 +4227,51 @@ end
                         if oldTask and oldTask ~= coroutine.running() then pcall(taskApi.cancel, oldTask) end
                     end
                 
+                    local function attackParts(model, character, playerRoot, folder, mode)
+                        if not model or model.Parent ~= folder or folder ~= npcFolder()
+                            or model == character or model.Name == localPlayer.Name then return nil end
+                        local humanoid, enemyRoot
+                        if mode == "farm" then
+                            if resumePending then return nil end
+                            if model ~= target then return nil end
+                            humanoid, enemyRoot = farmParts(model, folder)
+                            if humanoid ~= targetHumanoid or enemyRoot ~= targetRoot then return nil end
+                        else
+                            if mode == "thor" and model ~= externalAttackTarget then return nil end
+                            humanoid = model:FindFirstChild("Humanoid")
+                            enemyRoot = model:FindFirstChild("HumanoidRootPart")
+                        end
+                        if humanoid and humanoid:IsA("Humanoid") and enemyRoot and enemyRoot:IsA("BasePart")
+                            and humanoid.Health > 0 and (playerRoot.Position - enemyRoot.Position).Magnitude <= 21 then
+                            return humanoid, enemyRoot
+                        end
+                        return nil
+                    end
+                
                     local function attackLoop(runId)
                         local function running()
-                            return not destroyed and config.autoPunch and attackRunId == runId
+                            return not destroyed and not attackFault and attackRequested() and attackRunId == runId
                         end
-                        -- Keep the scan/cadence, but use Project Baki's working Imagination combat packet.
+                        -- One worker: Near Farm owns its selected target; standalone mode scans nearby models.
                         while running() do
-                            taskApi.wait()
+                            taskApi.wait(externalAttackOwner and not externalAttackTarget and 0.1 or nil)
                             if not running() then return end
                             local character, _, root = localCharacter()
                             local folder = npcFolder()
                             if character and folder then
                                 local sentBefore = punchSent
                                 local blockedRemote = false
-                                for _, model in pairs(folder:GetChildren()) do
+                                local mode = attackMode()
+                                local candidates
+                                if mode == "thor" then candidates = externalAttackTarget and { externalAttackTarget } or {}
+                                elseif mode == "farm" then candidates = target and { target } or {}
+                                else candidates = folder:GetChildren() end
+                                for _, model in ipairs(candidates) do
                                     if not running() then return end
-                                    if model ~= character and model:FindFirstChild("HumanoidRootPart") and model.Name ~= localPlayer.Name then
-                                        local currentCharacter, _, currentRoot = localCharacter()
-                                        local humanoid = model:FindFirstChild("Humanoid")
-                                        local enemyRoot = model:FindFirstChild("HumanoidRootPart")
-                                        if currentCharacter and humanoid and enemyRoot and humanoid.Health > 0
-                                            and (currentRoot.Position - enemyRoot.Position).Magnitude <= 21 then
+                                    local currentCharacter, _, currentRoot = localCharacter()
+                                    if currentCharacter then
+                                        local humanoid, enemyRoot = attackParts(model, currentCharacter, currentRoot, folder, mode)
+                                        if humanoid then
                                             local remotes = storage:FindFirstChild("Remotes")
                                             local clientToServer = remotes and remotes:FindFirstChild("ClientToServer")
                                             local remote = clientToServer and clientToServer:FindFirstChild("BasicCombat")
@@ -4098,6 +4280,10 @@ end
                                                 for combo = 1, 5 do
                                                     -- Cancel old work on stop/respawn instead of leaking a combo.
                                                     if not running() or localPlayer.Character ~= currentCharacter then return end
+                                                    local liveCharacter, _, liveRoot = localCharacter()
+                                                    if liveCharacter ~= currentCharacter or attackMode() ~= mode then break end
+                                                    local liveHumanoid, liveEnemyRoot = attackParts(model, liveCharacter, liveRoot, folder, mode)
+                                                    if liveHumanoid ~= humanoid or liveEnemyRoot ~= enemyRoot then break end
                                                     remote:FireServer(
                                                         "Light Punchy", combo, humanoid,
                                                         nil, nil, config.punchType ~= "Normal", false
@@ -4118,15 +4304,17 @@ end
                                         end
                                     end
                                 end
-                                if punchSent == sentBefore and not blockedRemote then reportPunch("waiting_target") end
+                                if punchSent == sentBefore and not blockedRemote then
+                                    reportPunch(waitingPunchReason())
+                                end
                             else
-                                reportPunch(character and "missing_folder" or "waiting_character")
+                                reportPunch(enabled and resumePending and "waiting_respawn" or (character and "missing_folder" or "waiting_character"))
                             end
                         end
                     end
                 
                     local function startAttack()
-                        if attackTask or destroyed or not config.autoPunch then return end
+                        if attackTask or destroyed or attackFault or not attackRequested() then return end
                         attackRunId = attackRunId + 1
                         local runId = attackRunId
                         attackTask = taskApi.spawn(function()
@@ -4134,11 +4322,51 @@ end
                             if attackRunId == runId then
                                 attackTask = nil
                                 if not ok then
-                                    controller:SetAutoPunch(false, "Auto Punch stopped: " .. tostring(err))
+                                    attackFault = true
+                                    config.autoPunch = false
+                                    local message = "Auto Punch stopped: " .. tostring(err)
+                                    if deps.onPunchEnabledChanged then pcall(deps.onPunchEnabledChanged, false, message) end
+                                    if deps.warn then deps.warn(message) end
+                                    if externalAttackOwner and type(externalAttackOwner.OnAttackError) == "function" then
+                                        pcall(externalAttackOwner.OnAttackError, externalAttackOwner, message)
+                                    end
                                     reportPunch("error")
                                 end
                             end
                         end)
+                    end
+                
+                    function controller:BeginExternalAttack(owner)
+                        if destroyed or not owner or (externalAttackOwner and externalAttackOwner ~= owner) then return false end
+                        if externalAttackOwner == owner then return true end
+                        controller:SetEnabled(false)
+                        externalAttackOwner, externalAttackTarget = owner, nil
+                        attackFault = false
+                        stopAttack()
+                        reportPunch("waiting_thor_target")
+                        startAttack()
+                        return true
+                    end
+                
+                    function controller:SetExternalAttackTarget(owner, model)
+                        if destroyed or externalAttackOwner ~= owner then return false end
+                        if externalAttackTarget == model then return true end
+                        externalAttackTarget = model
+                        attackFault = false
+                        stopAttack()
+                        reportPunch("waiting_thor_target")
+                        startAttack()
+                        return true
+                    end
+                
+                    function controller:EndExternalAttack(owner)
+                        if externalAttackOwner ~= owner then return false end
+                        externalAttackOwner, externalAttackTarget = nil, nil
+                        attackFault = false
+                        stopAttack()
+                        reportPunch(waitingPunchReason())
+                        startAttack()
+                        return true
                     end
                 
                     local function releaseSkillKey()
@@ -4160,6 +4388,8 @@ end
                     end
                 
                     local function skillAllowed()
+                        if externalAttackOwner and not externalAttackTarget then return false end
+                        if enabled and resumePending then return false end
                         return not deps.isSkillAllowed or deps.isSkillAllowed() == true
                     end
                 
@@ -4240,7 +4470,21 @@ end
                             return
                         end
                         local character, _, root = localCharacter()
-                        if not character or root.Anchored then clearTarget(); clearBinding(); scanModels = nil; return end
+                        if not character then rememberForRespawn(); return end
+                        if root.Anchored then clearBinding(); return end
+                        if resumePending then
+                            if resumeCharacter ~= character then
+                                resumeCharacter = character
+                                resumeReadyAt = clock() + config.respawnDelay
+                            end
+                            if clock() < resumeReadyAt then
+                                reportPunch("waiting_respawn")
+                                return
+                            end
+                            resumePending = false
+                            resumeCharacter, resumeReadyAt = nil, nil
+                            restoreRememberedTarget()
+                        end
                         bindCharacter(root)
                         local folder = npcFolder()
                         if target then
@@ -4261,11 +4505,19 @@ end
                     function controller:SetEnabled(state, reason)
                         state = state == true and not destroyed
                         if state == enabled then return end
+                        if state and externalAttackOwner then
+                            announce(false, "Disable Auto Farm Thor Boss before enabling Auto Farm Near.")
+                            return
+                        end
                         if state and deps.isOtherFarmActive and deps.isOtherFarmActive() then
                             announce(false, "Disable the other farm mode before enabling Auto Farm Near.")
                             return
                         end
                         enabled = state
+                        rememberedTarget, resumeCharacter, resumeReadyAt = nil, nil, nil
+                        resumePending = false
+                        attackFault = false
+                        stopAttack()
                         if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
                         clearTarget()
                         clearBinding()
@@ -4276,6 +4528,8 @@ end
                                 if not ok then controller:SetEnabled(false, "Auto Farm Near stopped: " .. tostring(err)) end
                             end)
                         end
+                        reportPunch(waitingPunchReason())
+                        startAttack()
                         announce(enabled, reason)
                     end
                 
@@ -4284,9 +4538,10 @@ end
                         state = state == true
                         if state == config.autoPunch then return true end
                         config.autoPunch = state
+                        attackFault = false
                         stopAttack()
-                        reportPunch(state and "waiting_target" or "off")
-                        if state then startAttack() end
+                        reportPunch(waitingPunchReason())
+                        startAttack()
                         if deps.onPunchEnabledChanged then
                             local ok, err = pcall(deps.onPunchEnabledChanged, state, reason)
                             if not ok and deps.warn then deps.warn("Auto Punch: " .. tostring(err)) end
@@ -4348,6 +4603,10 @@ end
                     function controller:IsAutoSkillEnabled() return skillEnabled end
                     function controller:Destroy()
                         if destroyed then return end
+                        if controller.thorController then
+                            controller.thorController:Destroy()
+                            controller.thorController = nil
+                        end
                         if controller.recoveryController then
                             controller.recoveryController:Destroy()
                             controller.recoveryController = nil
@@ -4357,16 +4616,23 @@ end
                         controller:SetAutoPunch(false)
                         stopAttack()
                         stopSkill()
+                        externalAttackOwner, externalAttackTarget = nil, nil
                         destroyed = true
                         if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
                         if controller.uiConnection then controller.uiConnection:Disconnect(); controller.uiConnection = nil end
                         clearTarget()
                         clearBinding()
                     end
-                    removingConnection = localPlayer.CharacterRemoving:Connect(function()
+                    removingConnection = localPlayer.CharacterRemoving:Connect(function(oldCharacter)
+                        retiringCharacter = oldCharacter or localPlayer.Character
                         stopAttack()
-                        clearTarget()
-                        clearBinding()
+                        attackFault = false
+                        if enabled then
+                            rememberForRespawn()
+                        else
+                            clearTarget()
+                            clearBinding()
+                        end
                         scanModels, scanFolder = nil, nil
                         stopSkill()
                         startAttack()
@@ -4586,6 +4852,319 @@ end
                 end
                 
                 
+                -- Thor detection is restricted to direct children of Game.Players, once per 5 seconds.
+                -- Entry prompts use bounded spatial queries and a two-slot cache; no world traversal.
+                local function createThorFarmController(deps)
+                    local controller = {}
+                    local world, player, players = deps.Workspace, deps.LocalPlayer, deps.Players
+                    local combat, taskApi = deps.Combat, deps.task or task
+                    local clock, makeInstance = deps.clock or os.clock, deps.newInstance or Instance.new
+                    local checkpoints = { Vector3.new(442, 3175, -1193), Vector3.new(539, 4131, -1051) }
+                    local promptRadius = 100
+                    local enabled, destroyed, boss = false, false, nil
+                    local phase, detail = "Off", "Off"
+                    local entryTask, entryGeneration = nil, 0
+                    local nextScan, nextAttempt = 0, 0
+                    local needsEntry, enteredCharacter, retiringCharacter = true, nil, nil
+                    local respawnHold, readyCharacter, readyAt = false, nil, nil
+                    local movementRoot, mover
+                    local promptCache = {}
+                    local scans, promptQueries, cacheHits, entries = 0, 0, 0, 0
+                    local heartbeat, removingConnection, promptConnection
+                
+                    function controller:GetStatus()
+                        return { enabled = enabled, phase = phase, detail = detail, boss = boss and boss.Name,
+                            scans = scans, promptQueries = promptQueries, promptCacheHits = cacheHits, entries = entries }
+                    end
+                
+                    local function status(nextPhase, message)
+                        if phase == nextPhase and detail == message then return end
+                        phase, detail = nextPhase, message
+                        if deps.onStatusChanged then pcall(deps.onStatusChanged, controller:GetStatus()) end
+                    end
+                
+                    local function folder()
+                        local gameFolder = world:FindFirstChild("Game")
+                        return gameFolder and gameFolder:FindFirstChild("Players")
+                    end
+                
+                    local function bossParts(model)
+                        if not model or model.Parent ~= folder() or not model:IsA("Model")
+                            or not string.find(string.lower(model.Name), "thor", 1, true) or model == player.Character then return nil end
+                        if players and players:GetPlayerFromCharacter(model) then return nil end
+                        local humanoid = model:FindFirstChildOfClass("Humanoid")
+                        if not humanoid or humanoid.Health <= 0 then return nil end
+                        local root = model:FindFirstChild("HumanoidRootPart")
+                        if root and not root:IsA("BasePart") then root = nil end
+                        return humanoid, root
+                    end
+                
+                    local function scanBoss()
+                        scans = scans + 1
+                        local npcFolder = folder()
+                        if npcFolder then
+                            for _, model in ipairs(npcFolder:GetChildren()) do
+                                if bossParts(model) then return model end
+                            end
+                        end
+                        return nil
+                    end
+                
+                    local function localParts()
+                        local character = player.Character
+                        if not character or character == retiringCharacter then return nil end
+                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                        local root = character:FindFirstChild("HumanoidRootPart")
+                        if humanoid and humanoid.Health > 0 and root and root:IsA("BasePart") and not root.Anchored then
+                            return character, root
+                        end
+                        return nil
+                    end
+                
+                    local function cleanupMover()
+                        if mover then mover:Destroy(); mover = nil end
+                        movementRoot = nil
+                    end
+                
+                    local function cancelEntry()
+                        entryGeneration = entryGeneration + 1
+                        local oldTask = entryTask
+                        entryTask = nil
+                        if oldTask and oldTask ~= coroutine.running() then pcall(taskApi.cancel, oldTask) end
+                    end
+                
+                    local function clearCombat()
+                        combat:SetExternalAttackTarget(controller, nil)
+                        cleanupMover()
+                    end
+                
+                    local function followBoss(character, root)
+                        local _, bossRoot = bossParts(boss)
+                        if not bossRoot then clearCombat(); status("WaitingRoot", "Waiting for Thor root"); return end
+                        if movementRoot ~= root then cleanupMover(); movementRoot = root end
+                        if mover and mover.Parent ~= root then mover:Destroy(); mover = nil end
+                        if not mover and not root:FindFirstChild("BodyVelocity") then
+                            mover = makeInstance("BodyVelocity")
+                            mover.Name = "ThorFarmVelocity"
+                            mover.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
+                            mover.Velocity = Vector3.zero
+                            mover.Parent = root
+                        end
+                        local position = bossRoot.Position + Vector3.new(0, 20, 0)
+                        root.CFrame = CFrame.lookAt(position, bossRoot.Position, Vector3.zAxis)
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        combat:SetExternalAttackTarget(controller, boss)
+                        status("Fighting", "Fighting " .. boss.Name)
+                    end
+                
+                    local function promptPart(prompt)
+                        if not prompt or not prompt.Parent or not prompt:IsA("ProximityPrompt") or prompt.Enabled == false then return nil end
+                        local parent = prompt.Parent
+                        if parent:IsA("Attachment") then parent = parent.Parent end
+                        if parent and parent:IsA("BasePart") and parent:IsDescendantOf(world) then return parent end
+                        return nil
+                    end
+                
+                    local function rememberPrompt(prompt)
+                        local part = promptPart(prompt)
+                        if not part then return end
+                        for index, point in ipairs(checkpoints) do
+                            local distance = (part.Position - point).Magnitude
+                            if distance <= promptRadius then
+                                local oldPart = promptPart(promptCache[index])
+                                if not oldPart or distance < (oldPart.Position - point).Magnitude then promptCache[index] = prompt end
+                            end
+                        end
+                    end
+                
+                    local function nearestPrompt(index, root)
+                        local cached = promptCache[index]
+                        local cachedPart = promptPart(cached)
+                        if cachedPart and (cachedPart.Position - root.Position).Magnitude <= promptRadius then cacheHits = cacheHits + 1; return cached end
+                        promptCache[index] = nil
+                        promptQueries = promptQueries + 1
+                        local parts
+                        if deps.queryParts then
+                            parts = deps.queryParts(root.Position, promptRadius)
+                        else
+                            local params = OverlapParams.new()
+                            params.FilterType = Enum.RaycastFilterType.Exclude
+                            params.FilterDescendantsInstances = player.Character and { player.Character } or {}
+                            parts = world:GetPartBoundsInRadius(root.Position, promptRadius, params)
+                        end
+                        local closest, distance = nil, promptRadius
+                        local function consider(prompt)
+                            local part = promptPart(prompt)
+                            if part then
+                                local candidateDistance = (part.Position - root.Position).Magnitude
+                                if candidateDistance <= distance then closest, distance = prompt, candidateDistance end
+                            end
+                        end
+                        for _, part in ipairs(parts) do
+                            for _, child in ipairs(part:GetChildren()) do
+                                if child:IsA("ProximityPrompt") then consider(child)
+                                elseif child:IsA("Attachment") then
+                                    for _, prompt in ipairs(child:GetChildren()) do if prompt:IsA("ProximityPrompt") then consider(prompt) end end
+                                end
+                            end
+                        end
+                        promptCache[index] = closest
+                        return closest
+                    end
+                
+                    local function startEntry(character)
+                        cancelEntry()
+                        clearCombat()
+                        local runId, entryBoss = entryGeneration, boss
+                        local function valid()
+                            local current = localParts()
+                            return enabled and not destroyed and entryGeneration == runId and boss == entryBoss
+                                and bossParts(entryBoss) ~= nil and current == character
+                        end
+                        entryTask = taskApi.spawn(function()
+                            local ok, completed = pcall(function()
+                                for index, point in ipairs(checkpoints) do
+                                    if not valid() then return false end
+                                    local _, root = localParts()
+                                    status("Entering", "Entering Thor arena " .. index .. "/2")
+                                    root.CFrame = CFrame.new(point)
+                                    taskApi.wait(0.5)
+                                    if not valid() then return false end
+                                    local _, currentRoot = localParts()
+                                    local prompt = nearestPrompt(index, currentRoot)
+                                    if not prompt then error("No portal prompt within 100 studs of entrance " .. index, 0) end
+                                    deps.firePrompt(prompt)
+                                    if not valid() then return false end
+                                    if index == 1 then taskApi.wait(1.5) end
+                                end
+                                taskApi.wait(0.5) -- Allow the final portal transfer to settle before following Thor.
+                                if not valid() then return false end
+                                enteredCharacter, needsEntry = character, false
+                                readyCharacter, readyAt, respawnHold = nil, nil, false
+                                entries = entries + 1
+                                local _, root = localParts()
+                                followBoss(character, root)
+                                return true
+                            end)
+                            if entryGeneration == runId then
+                                entryTask = nil
+                                if not ok then
+                                    clearCombat()
+                                    nextAttempt = clock() + 5
+                                    status("EntryRetry", tostring(completed) .. "; retry in 5 seconds")
+                                    if deps.warn then deps.warn("Thor Farm: " .. tostring(completed)) end
+                                end
+                            end
+                        end)
+                        if coroutine.status(entryTask) == "dead" then entryTask = nil end
+                    end
+                
+                    local function step()
+                        if not enabled or destroyed then return end
+                        if deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                            controller:SetEnabled(false, "Another farm mode started; Thor Farm stopped.")
+                            return
+                        end
+                        local now = clock()
+                        if boss and not bossParts(boss) then
+                            cancelEntry(); clearCombat()
+                            boss, enteredCharacter, needsEntry = nil, nil, true
+                        end
+                        if now >= nextScan then
+                            nextScan = now + 5
+                            if not boss then boss = scanBoss() end
+                        end
+                        if not boss then status("WaitingBoss", "Waiting for Thor (check every 5 seconds)"); return end
+                        local character, root = localParts()
+                        if not character then
+                            if entryTask then cancelEntry() end
+                            clearCombat()
+                            enteredCharacter, needsEntry, respawnHold = nil, true, true
+                            readyCharacter, readyAt = nil, nil
+                            status("WaitingRespawn", "Waiting for your character")
+                            return
+                        end
+                        if enteredCharacter and enteredCharacter ~= character then
+                            clearCombat()
+                            enteredCharacter, needsEntry, respawnHold = nil, true, true
+                        end
+                        if needsEntry then
+                            if entryTask then return end
+                            if respawnHold then
+                                if readyCharacter ~= character then readyCharacter, readyAt = character, now + 2 end
+                                if now < readyAt then status("WaitingRespawn", "Waiting 2 seconds after respawn readiness"); return end
+                            end
+                            if now >= nextAttempt then startEntry(character) end
+                            return
+                        end
+                        followBoss(character, root)
+                    end
+                
+                    function controller:SetEnabled(state, reason)
+                        if destroyed then return false end
+                        state = state == true
+                        if state == enabled then return true end
+                        if state then
+                            if type(deps.firePrompt) ~= "function" then
+                                status("Error", "Executor must support fireproximityprompt")
+                                if deps.onEnabledChanged then pcall(deps.onEnabledChanged, false, "fireproximityprompt is unavailable") end
+                                return false
+                            end
+                            if deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                                status("Error", "Disable the other farm mode before enabling Thor Farm")
+                                if deps.onEnabledChanged then pcall(deps.onEnabledChanged, false, detail) end
+                                return false
+                            end
+                            if not combat:BeginExternalAttack(controller) then return false end
+                        end
+                        enabled = state
+                        cancelEntry(); clearCombat()
+                        boss, enteredCharacter, needsEntry = nil, nil, true
+                        respawnHold, readyCharacter, readyAt = false, nil, nil
+                        nextScan, nextAttempt = 0, 0
+                        if not enabled then combat:EndExternalAttack(controller) end
+                        status(enabled and "WaitingBoss" or "Off", reason or (enabled and "Waiting for Thor (check every 5 seconds)" or "Off"))
+                        if deps.onEnabledChanged then pcall(deps.onEnabledChanged, enabled, reason) end
+                        return true
+                    end
+                
+                    function controller:IsEnabled() return enabled end
+                    function controller:OnAttackError(message)
+                        controller:SetEnabled(false, message)
+                        status("Error", message)
+                    end
+                    function controller:Destroy()
+                        if destroyed then return end
+                        controller:SetEnabled(false)
+                        destroyed = true
+                        cancelEntry(); cleanupMover()
+                        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+                        if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
+                        if promptConnection then promptConnection:Disconnect(); promptConnection = nil end
+                    end
+                
+                    heartbeat = deps.RunService.Heartbeat:Connect(function()
+                        local ok, err = pcall(step)
+                        if not ok then controller:SetEnabled(false, "Thor Farm stopped: " .. tostring(err)); status("Error", tostring(err)) end
+                    end)
+                    removingConnection = player.CharacterRemoving:Connect(function(character)
+                        retiringCharacter = character or player.Character
+                        if not enabled then return end
+                        cancelEntry(); clearCombat()
+                        enteredCharacter, needsEntry, respawnHold = nil, true, true
+                        readyCharacter, readyAt, nextAttempt = nil, nil, 0
+                        status("WaitingRespawn", "Waiting for your character")
+                    end)
+                    if deps.ProximityPromptService then
+                        promptConnection = deps.ProximityPromptService.PromptShown:Connect(function(prompt)
+                            if enabled and not destroyed then rememberPrompt(prompt) end
+                        end)
+                    end
+                    return controller
+                end
+                
+                
                 -- AUTO_FARM_NEAR_INTEGRATION
                 local runtime = getgenv and getgenv() or _G
                 local previousNearFarm = runtime.__SigmaAutoFarmNear
@@ -4598,6 +5177,15 @@ end
                 end
                 
                 local nearSwitch, autoSkillSwitch, nearPunchSwitch, punchStatusLabel
+                local thorSwitch, thorStatusLabel
+                local ThorFarmController
+                local function otherMovementFarmActive()
+                    return AutoIsland_Active or AutoBR_Active or AutoBRPunch_Active
+                        or AutoBRExtreme_Active or AutoShadow_Active
+                        or AutoIgnis_Active or AutoKrampus_Active or AutoLevel_Active
+                        or AutoIslandbal_Active or AutoBalraxionTerminator_Active
+                        or AutoRelic_Active or AutoSell_Active or AutoBazaarTokens_Active
+                end
                 local nearDependencies = {
                     Players = Players,
                     LocalPlayer = LocalPlayer,
@@ -4616,14 +5204,17 @@ end
                         local messages = {
                             off = "Auto Punch: Off",
                             waiting_target = "Auto Punch: waiting for target within 21 studs",
+                            waiting_farm_target = "Auto Farm Punch: waiting for selected NPC",
+                            waiting_thor_target = "Thor Punch: waiting for boss / arena entry",
                             waiting_character = "Auto Punch: waiting for your character",
+                            waiting_respawn = "Auto Farm: waiting for spawn readiness + 2 seconds",
                             missing_folder = "Auto Punch: Game.Players folder not found",
                             missing_remote = "Auto Punch: BasicCombat not found",
                             unsupported_remote = "Auto Punch: BasicCombat class is unsupported",
                             error = "Auto Punch: stopped after an error (check console)",
                         }
                         punchStatusLabel.Text = status.reason == "sent"
-                            and ("Auto Punch: sent " .. status.sent .. " -> " .. tostring(status.target))
+                            and ((status.mode == "thor" and "Thor Punch: sent " or (status.mode == "farm" and "Auto Farm Punch: sent " or "Auto Punch: sent ")) .. status.sent .. " -> " .. tostring(status.target))
                             or messages[status.reason] or "Auto Punch: waiting"
                     end,
                     isSkillAllowed = function()
@@ -4633,11 +5224,7 @@ end
                         return true
                     end,
                     isOtherFarmActive = function()
-                        return AutoIsland_Active or AutoBR_Active or AutoBRPunch_Active
-                            or AutoBRExtreme_Active or AutoShadow_Active
-                            or AutoIgnis_Active or AutoKrampus_Active or AutoLevel_Active
-                            or AutoIslandbal_Active or AutoBalraxionTerminator_Active
-                            or AutoRelic_Active or AutoSell_Active or AutoBazaarTokens_Active
+                        return otherMovementFarmActive() or (ThorFarmController and ThorFarmController:IsEnabled())
                     end,
                     onEnabledChanged = function(state, reason)
                         if not state and nearSwitch then nearSwitch:Set(false) end
@@ -4665,6 +5252,25 @@ end
                     hasSelectedSkills = function() return #nearController:GetSelectedSkills() > 0 end,
                 })
                 nearController.recoveryController = BossRushRecovery
+                ThorFarmController = createThorFarmController({
+                    Players = Players,
+                    LocalPlayer = LocalPlayer,
+                    Workspace = workspace,
+                    RunService = RunService,
+                    ProximityPromptService = game:GetService("ProximityPromptService"),
+                    Combat = nearController,
+                    firePrompt = fireproximityprompt,
+                    warn = warn,
+                    isOtherFarmActive = otherMovementFarmActive,
+                    onEnabledChanged = function(state, reason)
+                        if not state and thorSwitch then thorSwitch:Set(false) end
+                        if reason then notifyNearFarm(reason) end
+                    end,
+                    onStatusChanged = function(status)
+                        if thorStatusLabel then thorStatusLabel.Text = "Thor: " .. status.detail end
+                    end,
+                })
+                nearController.thorController = ThorFarmController
                 runtime.__SigmaAutoFarmNear = nearController
                 if window.main_frame and typeof(window.main_frame) == "Instance" then
                     nearController.uiConnection = window.main_frame.Destroying:Connect(function()
@@ -4672,6 +5278,16 @@ end
                         if runtime.__SigmaAutoFarmNear == nearController then runtime.__SigmaAutoFarmNear = nil end
                     end)
                 end
+                
+                thorSwitch = autoFarmTab:AddSwitch("Auto Farm Thor Boss", function(state)
+                    ThorFarmController:SetEnabled(state)
+                end)
+                thorSwitch:Set(false)
+                thorStatusLabel = autoFarmTab:AddLabel("Thor: Off")
+                thorStatusLabel.Size = UDim2.new(1, 0, 0, 36)
+                thorStatusLabel.TextWrapped = true
+                thorStatusLabel.TextSize = 12
+                thorStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
                 
                 nearSwitch = autoFarmTab:AddSwitch("Auto Farm Near NPC", function(state)
                     nearController:SetEnabled(state)
@@ -4699,11 +5315,11 @@ end
                 punchStatusLabel.TextWrapped = true
                 punchStatusLabel.TextSize = 12
                 punchStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-                local nearPunchSpeed = autoFarmTab:AddDropdown("Near Punch Speed (default 0.2)", function(value)
+                local nearPunchSpeed = autoFarmTab:AddDropdown("Auto Punch Speed (default 0.2)", function(value)
                     nearController:SetConfig("punchSpeed", value)
                 end)
                 for index = 1, 10 do nearPunchSpeed:Add(string.format("%.1f", index / 10)) end
-                local nearPunchType = autoFarmTab:AddDropdown("Near Punch Type (Normal)", function(value)
+                local nearPunchType = autoFarmTab:AddDropdown("Auto Punch Type (Normal)", function(value)
                     nearController:SetConfig("punchType", value)
                 end)
                 nearPunchType:Add("Normal")
