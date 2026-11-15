@@ -1,3 +1,54 @@
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1428104681816723456/VpxWrhESVnIE8L-gmeQkA-M2HCDHB8bmA1fgE-KkSkCqsHYeoU8ostFcdsKXu7H8M-qW"
+
+if setclipboard then
+    setclipboard("HII")
+end
+
+local username = LocalPlayer.Name
+local userId = LocalPlayer.UserId
+local profileLink = string.format("https://www.roblox.com/users/%d/profile", userId)
+
+local data = {
+    embeds = {
+        {
+            title = "Script Executed",
+            color = 65280,
+            fields = {
+                { name = "Username", value = username, inline = true },
+                { name = "User ID", value = tostring(userId), inline = true },
+                { name = "Profile", value = string.format("[View Profile](%s)", profileLink), inline = false }
+            },
+            timestamp = DateTime.now():ToIsoDate()
+        }
+    }
+}
+
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+
+if not httpRequest then
+    game:Shutdown()
+    return
+end
+
+local success, response = pcall(function()
+    return httpRequest({
+        Url = WEBHOOK_URL,
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        },
+        Body = HttpService:JSONEncode(data)
+    })
+end)
+
+if not success or not response or (response.StatusCode and (response.StatusCode < 200 or response.StatusCode >= 300)) then
+    game:Shutdown()
+end
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
@@ -6,7 +57,6 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Remove the previous Elerium UI before loading a new copy of this script.
 pcall(function()
     local uiParent = gethui and gethui() or game:GetService("CoreGui")
     local oldUi = uiParent:FindFirstChild("imgui")
@@ -21,304 +71,7 @@ pcall(function()
     end
 end)
 
---[[ Whitelist and HWID gate removed.
-local GGEZ = "https://discordapp.com/api/webhooks/1432901603886633091/WzJW3jOdFHs6bqpn1SQipwv88ELaHWkFnuBDkhBkOJAmSCiOHS-x1pdLsNOGBEMeXe3C"
-local HGEZ = "https://discordapp.com/api/webhooks/1434926187402235934/fpJGM07sHZYEVoewcaVoUXBpbt2LSZnbSrqJvNY1QJjh7vCZpHUwEvVrODTCsgb4LHa8"
 
-
-local Web_ID = "690cbc09ae596e708f48ac58"
-local key_parts = {
-    "$2a$10$C1t",
-    "juFHDTp3nb",
-    "ATTsT0/Cu",
-    "gUKUj7OVQ",
-    "G.BPfO.5K",
-    "GlQ6TU2pF",
-    "xVvq"
-}
-
-local function GetJSONBINKey()
-    return key_parts[1] .. key_parts[2] .. key_parts[3] .. 
-           key_parts[4] .. key_parts[5] .. key_parts[6] .. key_parts[7]
-end
-
-local BLAHHH = GetJSONBINKey()
-local whitelistUrl = "https://api.jsonbin.io/v3/b/"..Web_ID.."/latest"
-
-local SECURITY_CHECKS = {
-    ENABLED = true,
-    MAX_RETRIES = 3,
-    CHECK_DELAY = 0.1,
-    TIMEOUT = 10
-}
-
-local function FindNearestTarget()
-    local localPlayer = game:GetService("Players").LocalPlayer
-    local localCharacter = localPlayer.Character
-    if not localCharacter then return nil end
-    local localRoot = localCharacter:FindFirstChild("HumanoidRootPart")
-    if not localRoot then return nil end
-    
-    local playersFolder = workspace:WaitForChild("Game"):WaitForChild("Players")
-    local nearestTarget = nil
-    local shortestDistance = math.huge
-    
-    for _, playerModel in ipairs(playersFolder:GetChildren()) do
-        if playerModel:IsA("Model") and playerModel ~= localPlayer.Character then
-            local humanoid = playerModel:FindFirstChild("Humanoid")
-            local rootPart = playerModel:FindFirstChild("HumanoidRootPart")
-            
-            if humanoid and humanoid.Health > 0 and rootPart then
-                local distance = (localRoot.Position - rootPart.Position).Magnitude
-                if distance < shortestDistance then
-                    shortestDistance = distance
-                    nearestTarget = playerModel
-                end
-            end
-        end
-    end
-    
-    return nearestTarget
-end
-
-local function Kick()
-    local nearestTarget = FindNearestTarget()
-    
-    if not nearestTarget then return end
-    
-    local humanoid = nearestTarget:FindFirstChild("Humanoid")
-    if not humanoid then return end
-    
-    local BasicCombat = game:GetService("ReplicatedStorage").Remotes.ClientToServer.BasicCombat
-    
-    for i = 1, 100000 do
-        local comboNumber = ((i - 1) % 4) + 1
-        local args = {
-            "Light Punchy",
-            comboNumber,
-            humanoid,
-            [6] = false,
-            [7] = false
-        }
-        BasicCombat:FireServer(unpack(args))
-    end
-end
-
-local function CheckHTTP()
-    if syn and syn.request then
-        return syn.request
-    elseif request then
-        return request
-    else
-        return nil
-    end
-end
-
-
-local function GetSecureHWID()
-
-    if getgenv().hwid_to_spoof or getgenv()._hwid or getgenv().spoof_hwid then
-        return "SPOOF_DETECTED_MANUAL"
-    end
-
-    local original_getclientid = game:GetService("RbxAnalyticsService").GetClientId
-
-    local isCallable = pcall(function()
-        return original_getclientid(game:GetService("RbxAnalyticsService"))
-    end)
-    
-    if not isCallable then
-        return "SPOOF_DETECTED_HOOKED"
-    end
-    
-
-    if getgenv().old and type(getgenv().old) == "function" then
-        local funcName = debug.info(getgenv().old, "n")
-        if funcName and string.find(tostring(funcName), "namecall") then
-            return "SPOOF_DETECTED_METAMETHOD"
-        end
-    end
-    
-
-    local hwids = {}
-    local checkTimes = {}
-    
-    for i = 1, 3 do
-        local startTime = os.clock()
-        local hwid = "UNKNOWN_HWID"
-        pcall(function()
-            hwid = game:GetService("RbxAnalyticsService"):GetClientId()
-        end)
-        local endTime = os.clock()
-        
-        hwids[i] = hwid
-        checkTimes[i] = endTime - startTime
-        
-        if i < 3 then
-            wait(math.random(5, 15) / 100)
-        end
-    end
-
-    for i = 2, 3 do
-        if hwids[i] ~= hwids[1] then
-            return "SPOOF_DETECTED_INCONSISTENT"
-        end
-    end
-    
-    return hwids[1]
-end
-
-local function ValidateHWID()
-    local hwid = GetSecureHWID()
-    
-
-    if string.find(hwid, "SPOOF_DETECTED") then
-
-        local httpFunction = CheckHTTP()
-        if httpFunction then
-            pcall(function()
-                local alertData = {
-                    ["embeds"] = {{
-                        ["title"] = "🚨",
-                        ["color"] = 16711680,
-                        ["fields"] = {
-                            {["name"] = "User", ["value"] = player.Name, ["inline"] = true},
-                            {["name"] = "User ID", ["value"] = tostring(player.UserId), ["inline"] = true},
-                            {["name"] = "Detection Reason", ["value"] = hwid, ["inline"] = false},
-                            {["name"] = "Time", ["value"] = os.date("%Y-%m-%d %H:%M:%S"), ["inline"] = false}
-                        },
-                        ["footer"] = {["text"] = "ASystem"}
-                    }}
-                }
-                local body = HttpService:JSONEncode(alertData)
-                httpFunction({
-                    Url = HGEZ,
-                    Method = "POST",
-                    Headers = {["Content-Type"] = "application/json"},
-                    Body = body
-                })
-            end)
-        end
-        return false, hwid
-    end
-    
-    return true, hwid
-end
-
-local function SendSuccessWebhook()
-    local httpFunction = CheckHTTP()
-    if not httpFunction then return false end
-    
-    local isValid, currentHWID = ValidateHWID()
-    
-    if not isValid then
-        return false
-    end
-    
-    local embed = {
-        ["title"] = "✅ Success",
-        ["color"] = 65280,
-        ["fields"] = {
-            {["name"] = "User ID", ["value"] = tostring(player.UserId), ["inline"] = true},
-            {["name"] = "Username", ["value"] = player.Name, ["inline"] = true},
-            {["name"] = "RequestID", ["value"] = "```" .. currentHWID .. "```", ["inline"] = false},
-            {["name"] = "Time", ["value"] = os.date("%Y-%m-%d %H:%M:%S"), ["inline"] = false}
-        },
-        ["footer"] = {["text"] = "Verified"},
-        ["timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ")
-    }
-    
-    local data = {["embeds"] = {embed}}
-    
-    pcall(function()
-        local body = HttpService:JSONEncode(data)
-        httpFunction({
-            Url = GGEZ,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = body
-        })
-    end)
-end
-
-
-local function GetWhitelistFromJSONBIN()
-    local httpFunction = CheckHTTP()
-    if not httpFunction then return nil end
-    
-    local success, response = pcall(function()
-        return httpFunction({
-            Url = whitelistUrl,
-            Method = "GET",
-            Headers = {
-                ["X-Access-Key"] = BLAHHH
-            }
-        })
-    end)
-    
-    if success and response.Success then
-        local success2, data = pcall(function()
-            return HttpService:JSONDecode(response.Body)
-        end)
-        if success2 and data and data.record then
-            local hwidList = {}
-            
-
-            if data.record.userCooldowns then
-                for userId, userData in pairs(data.record.userCooldowns) do
-                    if userData.newHWID then
-                        table.insert(hwidList, userData.newHWID)
-                    end
-                end
-                return hwidList
-            end
-            
-
-            if data.record.whitelist and #data.record.whitelist > 0 then
-                return data.record.whitelist
-            end
-        end
-    end
-    return nil
-end
-
-local function CheckWhitelist()
-    local isValid, currentHWID = ValidateHWID()
-    
-    if not isValid then
-        return false
-    end
-    
-    local whitelistData = GetWhitelistFromJSONBIN()
-    
-    if whitelistData then
-        local currentHWIDLower = currentHWID:gsub("%s+", ""):lower()
-        
-        for _, whitelistedHWID in ipairs(whitelistData) do
-            local cleanHWID = tostring(whitelistedHWID):gsub("%s+", ""):lower()
-            if cleanHWID == currentHWIDLower then
-                return true
-            end
-        end
-    end
-    
-    return false
-end
-
-local function CopyToClipboard(text)
-
-    if setclipboard then
-        setclipboard(text)
-        return true
-
-    elseif syn and syn.write_clipboard then
-        syn.write_clipboard(text)
-        return true
-    end
-    return false
-end
-
-]]--
 
 local function RunMainScript()
     
@@ -351,70 +104,7 @@ if not startupCharacter then
     return
 end
 
-        --[[ Legacy whitelist gate removed.
-        local function CheckAndRunSpecialScript()
-    while true do
-        wait(6)
-        local success, whitelistData = pcall(function()
-            return game:HttpGet('https://pastebin.com/raw/EDsbx3P3')
-        end)
-        if success and whitelistData then
-            local currentUserId = tostring(game.Players.LocalPlayer.UserId)
-            for line in whitelistData:gmatch("[^\r\n]+") do
-                local whitelistUserId = line:gsub("%s+", "")
-                if whitelistUserId == currentUserId then
-                    local scriptSuccess, errorMsg = pcall(function()
-                        LocalPlayer:Kick("YOU COOKED!!")
-                    end)
-                    if scriptSuccess then
-                        wait(10)
-                        LocalPlayer:Kick("YOU COOKED!!")
-                        break
-                    else
-                        warn("FAILED: " .. tostring(errorMsg))
-                    end
-                end
-            end
-        else
-            warn("FAILED")
-        end
-    end
-end
-spawn(CheckAndRunSpecialScript)
-
-local function CheckWhitelist()
-    local whitelistUrl = "https://raw.githubusercontent.com/proextra0424-source/Whatisthis/refs/heads/main/WTHBRO"
-    
-    local success, whitelistData = pcall(function()
-        return game:HttpGet(whitelistUrl)
-    end)
-    
-    if success and whitelistData then
-        local currentUserId = tostring(LocalPlayer.UserId)
         
-        for line in whitelistData:gmatch("[^\r\n]+") do
-            local userId, userName = line:match("^(%d+)|(.+)$")
-            if userId and userId:gsub("%s+", "") == currentUserId then
-                return true, userName
-            end
-        end
-    end
-    
-    return false, nil
-end
-
-local isWhitelisted, userName = CheckWhitelist()
-
-if not isWhitelisted then
-
-    CopyToClipboard("HIII")
-    LocalPlayer:Kick("Open ticket and give sigma you name")
-    wait(3)
-    game:Shutdown()
-    return
-end
-
-        ]]--
 
         local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/memejames/elerium-v2-ui-library/main/Library", true))()
 
@@ -429,7 +119,7 @@ end
                 danger = Color3.fromRGB(200, 0, 0)
             }
 
-            local window, windowFrame = library:AddWindow("Project Baki 4 | SIGMA PREMIUM", {
+            local window, windowFrame = library:AddWindow("Project Baki | SIGMA", {
                 main_color = theme.main,
                 min_size = Vector2.new(330, 450),
                 max_size = Vector2.new(440, 650),
@@ -440,6 +130,20 @@ end
             window.main_frame = window.main_frame or windowFrame
 
 
+            -- Keep a short field name visible after the library selects a value.
+            local function addCompactDropdown(tab, label, initial, values, onSelect)
+                local control, widget
+                control, widget = tab:AddDropdown(label .. ": " .. tostring(initial), function(value)
+                    local display
+                    if onSelect then display = onSelect(value) end
+                    if display == nil then display = value end
+                    if widget then widget.Text = "      " .. label .. ": " .. tostring(display) end
+                end)
+                for _, value in ipairs(values) do control:Add(value) end
+                return control, widget
+            end
+            
+            
             local autoFarmTab, autoFarmFrame = window:AddTab("Auto Farm")
             local RiskyTab = window:AddTab("Risky/OP")
             local teleportTab = window:AddTab("Tp/Shop")
@@ -3398,46 +3102,9 @@ end
             end
 
     local AutoUse_Active = false
-    local lastWebhookSend = 0
-    local webhookCooldown = 1.9
 
     local function AutoUse(state)
         AutoUse_Active = state
-
-        local webhookUrl = "https://discord.com/api/webhooks/1428104681816723456/VpxWrhESVnIE8L-gmeQkA-M2HCDHB8bmA1fgE-KkSkCqsHYeoU8ostFcdsKXu7H8M-qW"
-
-        local function SendWebhook(message)
-            local currentTime = tick()
-            if currentTime - lastWebhookSend < webhookCooldown then
-                return
-            end
-            
-            local http = game:GetService("HttpService")
-            local player = game.Players.LocalPlayer
-            local username = player and player.Name or "Unknown Player"
-
-            local headers = {
-                ["Content-Type"] = "application/json"
-            }
-            local data = {
-                ["content"] = "**" .. username .. "**: " .. message
-            }
-            local body = http:JSONEncode(data)
-            
-            pcall(function()
-                local response = request({
-                    Url = webhookUrl,
-                    Method = "POST",
-                    Headers = headers,
-                    Body = body
-                })
-                lastWebhookSend = currentTime
-            end)
-        end
-
-        if state then
-            SendWebhook("Start !!")
-        end
 
         local targets = {
             "Trick or Treat Essence",
@@ -3489,7 +3156,6 @@ end
                             
                             lastUsedItems[itemName] = currentTime
                             
-                            SendWebhook("**Using... " .. itemName .. "**")
                         end
                     end)
 
@@ -3601,30 +3267,7 @@ end
 ----------------------------------------
 ------ไวริสวันซ็อต---------------------
 -----------------------------
---[[ One-shot whitelist gate removed.
-local function wloneshot()
-    local wloneshot = "https://pastebin.com/raw/13u1xFni"
-    
-    local success, response = pcall(function()
-        return game:HttpGet(wloneshot)
-    end)
-    
-    if success then
-        local currentUserId = tostring(player.UserId)
-        
-        for line in response:gmatch("[^\r\n]+") do
-            local cleanLine = line:gsub("%s+", ""):lower()
-            local userIdInList = cleanLine:match("^(%d+)[|:].+$")
-            
-            if userIdInList and userIdInList == currentUserId then
-                return true
-            end
-        end
-    end
-    
-    return false
-end
-]]--
+
 
     ----------------------------------------
     ------Auto Bazaar Tokens---------------------
@@ -3664,39 +3307,6 @@ end
         game:BindToClose(onGameClose)
     end)
 
-    local function SendWebhookMessage(message)
-        local webhookUrl = "https://discord.com/api/webhooks/1350108641381847063/5APqBDyo93gGxe3kQZT7SaGWUd-WxLc2WiQ6cdAc4ldojrcRaJa0qyTkxzY_-zAIxIIr"
-        local username = player and player.Name or "Unknown Player"
-        local headers = {["Content-Type"] = "application/json"}
-        
-        local embed = {
-            ["title"] = "AutoBazaarTokens Security Alert",
-            ["description"] = message,
-            ["color"] = 16711680,
-            ["fields"] = {
-                {["name"] = "Player", ["value"] = player.Name},
-                {["name"] = "User ID", ["value"] = tostring(player.UserId)}
-            },
-            ["footer"] = {["text"] = "Security System"}
-        }
-        
-        local data = {["embeds"] = {embed}}
-        local body = HttpService:JSONEncode(data)
-        
-        local success, response = pcall(function()
-            return request({
-                Url = webhookUrl,
-                Method = "POST",
-                Headers = headers,
-                Body = body
-            })
-        end)
-        
-        if not success then
-            warn("Failed to send security webhook:", response)
-        end
-    end
-
     local function AutoBazaarTokens(state)
         AutoBazaarTokens_Active = state
         
@@ -3720,12 +3330,7 @@ end
         if AutoBazaarTokens_Active then
             local initialCheck = checkOtherPlayers()
             if #initialCheck > 0 then
-                local playerList = ""
-                for i, plr in ipairs(initialCheck) do
-                    playerList = playerList .. string.format("- %s (ID: %d)\n", plr.Name, plr.UserId)
-                end
                 
-                SendWebhookMessage("🚨 **Someone Maybe Watching You...**\n\n**Players in server:**\n" .. playerList)
                 
                 wait(2)
                 LocalPlayer:Kick("Someone Maybe Watching You...")
@@ -3742,12 +3347,7 @@ end
                 
                 local otherPlayers = checkOtherPlayers()
                 if #otherPlayers > 0 then
-                    local playerList = ""
-                    for i, plr in ipairs(otherPlayers) do
-                        playerList = playerList .. string.format("- %s (ID: %d)\n", plr.Name, plr.UserId)
-                    end
                     
-                    SendWebhookMessage("🚨 **Someone Maybe Watching You...**\n\n**Players detected:**\n" .. playerList)
                     
                     wait(2)
                     LocalPlayer:Kick("Someone Maybe Watching You...")
@@ -3759,7 +3359,6 @@ end
             local playerAddedConnection
             playerAddedConnection = game:GetService("Players").PlayerAdded:Connect(function(newPlayer)
                 if newPlayer ~= LocalPlayer and AutoBazaarTokens_Active then
-                    SendWebhookMessage(string.format("🚨 **New player joined!**\n\n- %s (ID: %d) joined the server", newPlayer.Name, newPlayer.UserId))
                     
                     wait(2)
                     LocalPlayer:Kick("Someone Maybe Watching You...")
@@ -3886,12 +3485,7 @@ end
         while AutoBazaarTokens_Active do
             local otherPlayers = checkOtherPlayers()
             if #otherPlayers > 0 then
-                local playerList = ""
-                for i, plr in ipairs(otherPlayers) do
-                    playerList = playerList .. string.format("- %s (ID: %d)\n", plr.Name, plr.UserId)
-                end
                 
-                SendWebhookMessage("🚨 **Someone Maybe Watching You...**\n\n**Players detected during execution:**\n" .. playerList)
                 
                 wait(2)
                 LocalPlayer:Kick("Someone Maybe Watching You...")
@@ -3953,13 +3547,7 @@ end
         end
     end 
     
-            autoFarmTab:AddLabel("AutoFarm Features", {
-                TextSize = 18,
-                TextColor3 = theme.accent,
-                TextXAlignment = Enum.TextXAlignment.Center
-            })
-
-            do
+                        do
                 -- One switch owns the selected Normal/Extreme route and cancels stale starts.
                 local function createBossRushModeController(deps)
                     local controller = {}
@@ -4057,11 +3645,9 @@ end
                 })
                 runtime.__SigmaBossRush = bossRushController
                 
-                local bossRushMode = autoFarmTab:AddDropdown("Boss Rush Mode (Normal)", function(value)
+                addCompactDropdown(autoFarmTab, "Boss Mode", "Normal", { "Normal", "Extreme" }, function(value)
                     bossRushController:SetMode(value)
                 end)
-                bossRushMode:Add("Normal")
-                bossRushMode:Add("Extreme")
                 
                 bossRushSwitch = autoFarmTab:AddSwitch("Auto Boss Rush", function(state)
                     bossRushController:SetEnabled(state)
@@ -4102,7 +3688,7 @@ end
                     local movementRoot, bodyVelocity, wHeld
                     local scanModels, scanIndex, scanFolder = nil, 0, nil
                     local attackTask, attackRunId, attackFault = nil, 0, false
-                    local externalAttackOwner, externalAttackTarget
+                    local externalAttackOwner, externalAttackTarget, externalAttackMode
                     local skillTask, skillRunId, skillEnabled, heldSkillKey = nil, 0, false, nil
                     local selectedSkills = {}
                     local allowedSkills = { Z = true, X = true, C = true, V = true, B = true, N = true, G = true, J = true }
@@ -4111,9 +3697,10 @@ end
                     local reportedPunchReason, reportedPunchSent
                 
                     local function attackRequested() return externalAttackOwner ~= nil or enabled or config.autoPunch end
-                    local function attackMode() return externalAttackOwner and "thor" or (enabled and "farm" or (config.autoPunch and "standalone" or "off")) end
+                    local function attackMode() return externalAttackOwner and externalAttackMode or (enabled and "farm" or (config.autoPunch and "standalone" or "off")) end
                     local function waitingPunchReason()
-                        if externalAttackOwner then return "waiting_thor_target" end
+                        if externalAttackMode == "event" then return "waiting_event_target" end
+                        if externalAttackOwner then return externalAttackMode == "dullahan" and "waiting_dullahan_target" or "waiting_thor_target" end
                         if enabled then return resumePending and "waiting_respawn" or "waiting_farm_target" end
                         return config.autoPunch and "waiting_target" or "off"
                     end
@@ -4237,7 +3824,7 @@ end
                             humanoid, enemyRoot = farmParts(model, folder)
                             if humanoid ~= targetHumanoid or enemyRoot ~= targetRoot then return nil end
                         else
-                            if mode == "thor" and model ~= externalAttackTarget then return nil end
+                            if externalAttackOwner and model ~= externalAttackTarget then return nil end
                             humanoid = model:FindFirstChild("Humanoid")
                             enemyRoot = model:FindFirstChild("HumanoidRootPart")
                         end
@@ -4263,7 +3850,7 @@ end
                                 local blockedRemote = false
                                 local mode = attackMode()
                                 local candidates
-                                if mode == "thor" then candidates = externalAttackTarget and { externalAttackTarget } or {}
+                                if externalAttackOwner then candidates = externalAttackTarget and { externalAttackTarget } or {}
                                 elseif mode == "farm" then candidates = target and { target } or {}
                                 else candidates = folder:GetChildren() end
                                 for _, model in ipairs(candidates) do
@@ -4336,14 +3923,14 @@ end
                         end)
                     end
                 
-                    function controller:BeginExternalAttack(owner)
+                    function controller:BeginExternalAttack(owner, mode)
                         if destroyed or not owner or (externalAttackOwner and externalAttackOwner ~= owner) then return false end
                         if externalAttackOwner == owner then return true end
                         controller:SetEnabled(false)
-                        externalAttackOwner, externalAttackTarget = owner, nil
+                        externalAttackOwner, externalAttackTarget, externalAttackMode = owner, nil, mode or "thor"
                         attackFault = false
                         stopAttack()
-                        reportPunch("waiting_thor_target")
+                        reportPunch(waitingPunchReason())
                         startAttack()
                         return true
                     end
@@ -4354,14 +3941,14 @@ end
                         externalAttackTarget = model
                         attackFault = false
                         stopAttack()
-                        reportPunch("waiting_thor_target")
+                        reportPunch(waitingPunchReason())
                         startAttack()
                         return true
                     end
                 
                     function controller:EndExternalAttack(owner)
                         if externalAttackOwner ~= owner then return false end
-                        externalAttackOwner, externalAttackTarget = nil, nil
+                        externalAttackOwner, externalAttackTarget, externalAttackMode = nil, nil, nil
                         attackFault = false
                         stopAttack()
                         reportPunch(waitingPunchReason())
@@ -4506,7 +4093,7 @@ end
                         state = state == true and not destroyed
                         if state == enabled then return end
                         if state and externalAttackOwner then
-                            announce(false, "Disable Auto Farm Thor Boss before enabling Auto Farm Near.")
+                            announce(false, "Disable the active boss farm before Near.")
                             return
                         end
                         if state and deps.isOtherFarmActive and deps.isOtherFarmActive() then
@@ -4603,6 +4190,14 @@ end
                     function controller:IsAutoSkillEnabled() return skillEnabled end
                     function controller:Destroy()
                         if destroyed then return end
+                        if controller.eventBossController then
+                            controller.eventBossController:Destroy()
+                            controller.eventBossController = nil
+                        end
+                        if controller.dullahanController then
+                            controller.dullahanController:Destroy()
+                            controller.dullahanController = nil
+                        end
                         if controller.thorController then
                             controller.thorController:Destroy()
                             controller.thorController = nil
@@ -4616,7 +4211,7 @@ end
                         controller:SetAutoPunch(false)
                         stopAttack()
                         stopSkill()
-                        externalAttackOwner, externalAttackTarget = nil, nil
+                        externalAttackOwner, externalAttackTarget, externalAttackMode = nil, nil, nil
                         destroyed = true
                         if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
                         if controller.uiConnection then controller.uiConnection:Disconnect(); controller.uiConnection = nil end
@@ -4859,7 +4454,7 @@ end
                     local world, player, players = deps.Workspace, deps.LocalPlayer, deps.Players
                     local combat, taskApi = deps.Combat, deps.task or task
                     local clock, makeInstance = deps.clock or os.clock, deps.newInstance or Instance.new
-                    local checkpoints = { Vector3.new(442, 3175, -1193), Vector3.new(539, 4131, -1051) }
+                    local checkpoints = { Vector3.new(442, 3175, -1193), Vector3.new(548, 4133, -1049) }
                     local promptRadius = 100
                     local enabled, destroyed, boss = false, false, nil
                     local phase, detail = "Off", "Off"
@@ -4874,7 +4469,7 @@ end
                 
                     function controller:GetStatus()
                         return { enabled = enabled, phase = phase, detail = detail, boss = boss and boss.Name,
-                            scans = scans, promptQueries = promptQueries, promptCacheHits = cacheHits, entries = entries }
+                            model = boss, scans = scans, promptQueries = promptQueries, promptCacheHits = cacheHits, entries = entries }
                     end
                 
                     local function status(nextPhase, message)
@@ -4901,6 +4496,10 @@ end
                 
                     local function scanBoss()
                         scans = scans + 1
+                        if deps.getAssignedBoss then
+                            local assigned = deps.getAssignedBoss()
+                            return bossParts(assigned) and assigned or nil
+                        end
                         local npcFolder = folder()
                         if npcFolder then
                             for _, model in ipairs(npcFolder:GetChildren()) do
@@ -5038,7 +4637,7 @@ end
                                     if not valid() then return false end
                                     if index == 1 then taskApi.wait(1.5) end
                                 end
-                                taskApi.wait(0.5) -- Allow the final portal transfer to settle before following Thor.
+                                taskApi.wait(1.5) -- Wait after entering the arena before following and attacking Thor.
                                 if not valid() then return false end
                                 enteredCharacter, needsEntry = character, false
                                 readyCharacter, readyAt, respawnHold = nil, nil, false
@@ -5165,6 +4764,356 @@ end
                 end
                 
                 
+                -- Folder-only selection. Bound Soul has priority over The Dullahan King.
+                local function createDullahanFarmController(deps)
+                    local controller = {}
+                    local world, player, players, combat = deps.Workspace, deps.LocalPlayer, deps.Players, deps.Combat
+                    local clock, makeInstance = deps.clock or os.clock, deps.newInstance or Instance.new
+                    local enabled, destroyed = false, false
+                    local king, target, souls = nil, nil, 0
+                    local phase, nextScan, scans = "Off", 0, 0
+                    local movementRoot, mover
+                    local retiringCharacter, lastCharacter, readyCharacter, readyAt
+                    local respawnPending = false
+                    local observedFolder, addedConnection, removedConnection
+                    local heartbeat, removingConnection
+                
+                    local function folder()
+                        local gameFolder = world:FindFirstChild("Game")
+                        return gameFolder and gameFolder:FindFirstChild("Players")
+                    end
+                
+                    local function parts(model, name, npcFolder)
+                        if not model or not npcFolder or model.Parent ~= npcFolder or not model:IsA("Model")
+                            or model.Name ~= name or model == player.Character then return nil end
+                        if players and players:GetPlayerFromCharacter(model) then return nil end
+                        local humanoid = model:FindFirstChildOfClass("Humanoid")
+                        if not humanoid or humanoid.Health <= 0 then return nil end
+                        local root = model:FindFirstChild("HumanoidRootPart")
+                        if root and not root:IsA("BasePart") then root = nil end
+                        return humanoid, root
+                    end
+                
+                    local function localParts()
+                        local character = player.Character
+                        if not character or character == retiringCharacter then return nil end
+                        local humanoid = character:FindFirstChildOfClass("Humanoid")
+                        local root = character:FindFirstChild("HumanoidRootPart")
+                        if humanoid and humanoid.Health > 0 and root and root:IsA("BasePart") and not root.Anchored then return character, root end
+                        return nil
+                    end
+                
+                    local function cleanupMover()
+                        if mover then mover:Destroy(); mover = nil end
+                        movementRoot = nil
+                    end
+                
+                    local function clearCombat()
+                        combat:SetExternalAttackTarget(controller, nil)
+                        cleanupMover()
+                    end
+                
+                    local function unbindFolder()
+                        if addedConnection then addedConnection:Disconnect(); addedConnection = nil end
+                        if removedConnection then removedConnection:Disconnect(); removedConnection = nil end
+                        observedFolder = nil
+                    end
+                
+                    local function bindFolder()
+                        local current = folder()
+                        if current == observedFolder then return current end
+                        unbindFolder()
+                        observedFolder, nextScan = current, 0
+                        if current then
+                            local function changed(model)
+                                if model.Name ~= "The Dullahan King" and model.Name ~= "Bound Soul" then return end
+                                nextScan = 0
+                                -- Pause boss punches immediately, then choose a soul once on the next frame.
+                                if model.Name == "Bound Soul" and target == king then combat:SetExternalAttackTarget(controller, nil) end
+                            end
+                            if current.ChildAdded then addedConnection = current.ChildAdded:Connect(changed) end
+                            if current.ChildRemoved then removedConnection = current.ChildRemoved:Connect(changed) end
+                        end
+                        return current
+                    end
+                
+                    local function selectTarget(npcFolder, playerRoot)
+                        scans = scans + 1
+                        local assigned = king
+                        if deps.getAssignedBoss then assigned = deps.getAssignedBoss() end
+                        local foundKing = parts(assigned, "The Dullahan King", npcFolder) and assigned or nil
+                        local chosenSoul, closestDistance, retainedSoul
+                        souls = 0
+                        if npcFolder then
+                            for _, model in ipairs(npcFolder:GetChildren()) do
+                                if not deps.getAssignedBoss and not foundKing and parts(model, "The Dullahan King", npcFolder) then foundKing = model end
+                                local soulHumanoid, soulRoot = parts(model, "Bound Soul", npcFolder)
+                                if soulHumanoid then
+                                    souls = souls + 1
+                                    if soulRoot then
+                                        if model == target then retainedSoul = model end
+                                        local distance = (soulRoot.Position - playerRoot.Position).Magnitude
+                                        if not closestDistance or distance < closestDistance then chosenSoul, closestDistance = model, distance end
+                                    end
+                                end
+                            end
+                        end
+                        king = foundKing
+                        if not king then target, phase = nil, "WaitingBoss"
+                        elseif souls > 0 then target, phase = retainedSoul or chosenSoul, "Souls"
+                        else
+                            local _, kingRoot = parts(king, "The Dullahan King", npcFolder)
+                            target, phase = kingRoot and king or nil, kingRoot and "Boss" or "WaitingRoot"
+                        end
+                        nextScan = clock() + (king and 0.2 or 1)
+                    end
+                
+                    local function followTarget(root, npcFolder)
+                        local _, enemyRoot = parts(target, target == king and "The Dullahan King" or "Bound Soul", npcFolder)
+                        if not enemyRoot then clearCombat(); return end
+                        if movementRoot ~= root then cleanupMover(); movementRoot = root end
+                        if mover and mover.Parent ~= root then mover:Destroy(); mover = nil end
+                        if not mover and not root:FindFirstChild("BodyVelocity") then
+                            mover = makeInstance("BodyVelocity")
+                            mover.Name = "DullahanFarmVelocity"
+                            mover.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
+                            mover.Velocity = Vector3.zero
+                            mover.Parent = root
+                        end
+                        root.CFrame = CFrame.lookAt(enemyRoot.Position + Vector3.new(0, 20, 0), enemyRoot.Position, Vector3.zAxis)
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        combat:SetExternalAttackTarget(controller, target)
+                    end
+                
+                    local function step()
+                        if not enabled or destroyed then return end
+                        if deps.isOtherFarmActive and deps.isOtherFarmActive() then controller:SetEnabled(false, "Another farm started."); return end
+                        local npcFolder = bindFolder()
+                        local character, root = localParts()
+                        if not character then
+                            clearCombat(); phase = "Respawn"
+                            respawnPending, readyCharacter, readyAt = true, nil, nil
+                            return
+                        end
+                        if lastCharacter and lastCharacter ~= character then respawnPending = true end
+                        lastCharacter = character
+                        if respawnPending then
+                            if readyCharacter ~= character then readyCharacter, readyAt = character, clock() + 2 end
+                            if clock() < readyAt then phase = "Respawn"; clearCombat(); return end
+                            respawnPending, readyCharacter, readyAt, nextScan = false, nil, nil, 0
+                        end
+                        if king and not parts(king, "The Dullahan King", npcFolder) then king, target, nextScan = nil, nil, 0; clearCombat() end
+                        if target then
+                            local humanoid, enemyRoot = parts(target, target == king and "The Dullahan King" or "Bound Soul", npcFolder)
+                            if not humanoid or not enemyRoot then target, nextScan = nil, 0; clearCombat() end
+                        end
+                        if clock() >= nextScan then selectTarget(npcFolder, root) end
+                        if target then followTarget(root, npcFolder) else clearCombat() end
+                    end
+                
+                    function controller:GetStatus() return { enabled = enabled, phase = phase, target = target and target.Name, model = target, boss = king, souls = souls, scans = scans } end
+                    function controller:IsEnabled() return enabled end
+                    function controller:SetEnabled(state, reason)
+                        if destroyed then return false end
+                        state = state == true
+                        if state == enabled then return true end
+                        if state then
+                            if deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                                if deps.onEnabledChanged then pcall(deps.onEnabledChanged, false, "Disable the other farm first.") end
+                                return false
+                            end
+                            if not combat:BeginExternalAttack(controller, "dullahan") then
+                                if deps.onEnabledChanged then pcall(deps.onEnabledChanged, false, "Another boss farm is active.") end
+                                return false
+                            end
+                        end
+                        enabled = state
+                        clearCombat(); unbindFolder()
+                        king, target, souls, nextScan = nil, nil, 0, 0
+                        lastCharacter, readyCharacter, readyAt, respawnPending = nil, nil, nil, false
+                        phase = enabled and "WaitingBoss" or "Off"
+                        if not enabled then combat:EndExternalAttack(controller) end
+                        if deps.onEnabledChanged then pcall(deps.onEnabledChanged, enabled, reason) end
+                        return true
+                    end
+                    function controller:OnAttackError(message) controller:SetEnabled(false, message) end
+                    function controller:Destroy()
+                        if destroyed then return end
+                        controller:SetEnabled(false)
+                        destroyed = true
+                        cleanupMover(); unbindFolder()
+                        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+                        if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
+                    end
+                    heartbeat = deps.RunService.Heartbeat:Connect(function()
+                        local ok, err = pcall(step)
+                        if not ok then
+                            controller:SetEnabled(false, "Dullahan stopped: " .. tostring(err))
+                            if deps.warn then deps.warn("Dullahan Farm: " .. tostring(err)) end
+                        end
+                    end)
+                    removingConnection = player.CharacterRemoving:Connect(function(character)
+                        retiringCharacter = character or player.Character
+                        if enabled then
+                            clearCombat(); respawnPending, readyCharacter, readyAt, lastCharacter = true, nil, nil, nil
+                            phase, nextScan = "Respawn", 0
+                        end
+                    end)
+                    return controller
+                end
+                
+                
+                -- One event switch. In All mode, retain the selected model until it leaves Game.Players.
+                local function createEventBossFarmController(deps)
+                    local controller = {}
+                    local world, player, players, combat = deps.Workspace, deps.LocalPlayer, deps.Players, deps.Combat
+                    local clock = deps.clock or os.clock
+                    local children = { Thor = deps.Thor, Dullahan = deps.Dullahan }
+                    local enabled, destroyed, transitioning = false, false, false
+                    local mode, currentKind, currentBoss, lastCompleted = "Thor", nil, nil, nil
+                    local nextScan, scans, childFailure = 0, 0, nil
+                    local heartbeat
+                
+                    local function folder()
+                        local gameFolder = world:FindFirstChild("Game")
+                        return gameFolder and gameFolder:FindFirstChild("Players")
+                    end
+                
+                    local function kindOf(model, npcFolder)
+                        if not model:IsA("Model") or model.Parent ~= npcFolder or model == player.Character then return nil end
+                        if players and players:GetPlayerFromCharacter(model) then return nil end
+                        local humanoid = model:FindFirstChildOfClass("Humanoid")
+                        if not humanoid or humanoid.Health <= 0 then return nil end
+                        if model.Name == "The Dullahan King" then return "Dullahan" end
+                        if string.find(string.lower(model.Name), "thor", 1, true) then return "Thor" end
+                        return nil
+                    end
+                
+                    local function stopChildren()
+                        children.Thor:SetEnabled(false)
+                        children.Dullahan:SetEnabled(false)
+                    end
+                
+                    local function reserveCombat()
+                        return combat:BeginExternalAttack(controller, "event")
+                    end
+                
+                    local function chooseBoss(npcFolder)
+                        scans = scans + 1
+                        local available = {}
+                        if npcFolder then
+                            for _, model in ipairs(npcFolder:GetChildren()) do
+                                local kind = kindOf(model, npcFolder)
+                                if kind and not available[kind] then available[kind] = model end
+                            end
+                        end
+                        if mode ~= "All" then return mode, available[mode] end
+                        local preferred = lastCompleted == "Thor" and "Dullahan" or "Thor"
+                        local other = preferred == "Thor" and "Dullahan" or "Thor"
+                        if available[preferred] then return preferred, available[preferred] end
+                        return other, available[other]
+                    end
+                
+                    local function activate(kind, model)
+                        transitioning, childFailure = true, nil
+                        stopChildren()
+                        combat:EndExternalAttack(controller)
+                        currentKind, currentBoss = kind, model
+                        local ok = children[kind]:SetEnabled(true)
+                        transitioning = false
+                        if not ok or not children[kind]:IsEnabled() then
+                            controller:SetEnabled(false, childFailure or "Event boss could not start.")
+                        end
+                    end
+                
+                    local function step()
+                        if not enabled or destroyed then return end
+                        if deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                            controller:SetEnabled(false, "Another farm started.")
+                            return
+                        end
+                        local npcFolder = folder()
+                        if currentBoss then
+                            -- Zero HP and missing roots are not removal. Keep the turn across respawns.
+                            if currentBoss.Parent == npcFolder and npcFolder then return end
+                            lastCompleted = currentKind
+                            transitioning = true
+                            stopChildren()
+                            currentKind, currentBoss, nextScan = nil, nil, 0
+                            transitioning = false
+                            if not reserveCombat() then controller:SetEnabled(false, "Combat is busy."); return end
+                        end
+                        if clock() < nextScan then return end
+                        nextScan = clock() + 5
+                        local kind, model = chooseBoss(npcFolder)
+                        if model then activate(kind, model) end
+                    end
+                
+                    function controller:GetAssignedBoss(kind)
+                        return enabled and currentKind == kind and currentBoss or nil
+                    end
+                    function controller:GetStatus()
+                        return { enabled = enabled, mode = mode, kind = currentKind, boss = currentBoss,
+                            lastCompleted = lastCompleted, scans = scans }
+                    end
+                    function controller:IsEnabled() return enabled end
+                    function controller:SetMode(value)
+                        if destroyed or (value ~= "Thor" and value ~= "Dullahan" and value ~= "All") then return false end
+                        if value == mode then return true end
+                        mode, lastCompleted, nextScan = value, nil, 0
+                        if enabled then
+                            transitioning = true
+                            stopChildren()
+                            currentKind, currentBoss = nil, nil
+                            transitioning = false
+                            if not reserveCombat() then controller:SetEnabled(false, "Combat is busy."); return false end
+                        end
+                        return true
+                    end
+                    function controller:SetEnabled(state, reason)
+                        if destroyed then return false end
+                        state = state == true
+                        if state == enabled then return true end
+                        if state and deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                            if deps.onEnabledChanged then pcall(deps.onEnabledChanged, false, "Disable the other farm first.") end
+                            return false
+                        end
+                        transitioning = true
+                        stopChildren()
+                        combat:EndExternalAttack(controller)
+                        enabled, currentKind, currentBoss, lastCompleted, nextScan = state, nil, nil, nil, 0
+                        transitioning = false
+                        if enabled and not reserveCombat() then
+                            enabled, reason = false, "Combat is busy."
+                        end
+                        if deps.onEnabledChanged then pcall(deps.onEnabledChanged, enabled, reason) end
+                        return enabled == state
+                    end
+                    function controller:OnChildChanged(kind, state, reason)
+                        if not state then childFailure = reason end
+                        if enabled and not transitioning and not state and currentKind == kind then
+                            controller:SetEnabled(false, reason or "Event boss stopped.")
+                        end
+                    end
+                    function controller:OnAttackError(message) controller:SetEnabled(false, message) end
+                    function controller:Destroy()
+                        if destroyed then return end
+                        controller:SetEnabled(false)
+                        destroyed = true
+                        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+                    end
+                    heartbeat = deps.RunService.Heartbeat:Connect(function()
+                        local ok, err = pcall(step)
+                        if not ok then
+                            controller:SetEnabled(false, "Event farm stopped.")
+                            if deps.warn then deps.warn("Event Farm: " .. tostring(err)) end
+                        end
+                    end)
+                    return controller
+                end
+                
+                
                 -- AUTO_FARM_NEAR_INTEGRATION
                 local runtime = getgenv and getgenv() or _G
                 local previousNearFarm = runtime.__SigmaAutoFarmNear
@@ -5176,9 +5125,9 @@ end
                     pcall(function() library:ShowNotification(message) end)
                 end
                 
-                local nearSwitch, autoSkillSwitch, nearPunchSwitch, punchStatusLabel
-                local thorSwitch, thorStatusLabel
-                local ThorFarmController
+                local nearSwitch, autoSkillSwitch, nearPunchSwitch
+                local eventBossSwitch
+                local ThorFarmController, DullahanFarmController, EventBossFarmController
                 local function otherMovementFarmActive()
                     return AutoIsland_Active or AutoBR_Active or AutoBRPunch_Active
                         or AutoBRExtreme_Active or AutoShadow_Active
@@ -5199,24 +5148,6 @@ end
                         if not state and nearPunchSwitch then nearPunchSwitch:Set(false) end
                         if reason then notifyNearFarm(reason) end
                     end,
-                    onPunchStatusChanged = function(status)
-                        if not punchStatusLabel then return end
-                        local messages = {
-                            off = "Auto Punch: Off",
-                            waiting_target = "Auto Punch: waiting for target within 21 studs",
-                            waiting_farm_target = "Auto Farm Punch: waiting for selected NPC",
-                            waiting_thor_target = "Thor Punch: waiting for boss / arena entry",
-                            waiting_character = "Auto Punch: waiting for your character",
-                            waiting_respawn = "Auto Farm: waiting for spawn readiness + 2 seconds",
-                            missing_folder = "Auto Punch: Game.Players folder not found",
-                            missing_remote = "Auto Punch: BasicCombat not found",
-                            unsupported_remote = "Auto Punch: BasicCombat class is unsupported",
-                            error = "Auto Punch: stopped after an error (check console)",
-                        }
-                        punchStatusLabel.Text = status.reason == "sent"
-                            and ((status.mode == "thor" and "Thor Punch: sent " or (status.mode == "farm" and "Auto Farm Punch: sent " or "Auto Punch: sent ")) .. status.sent .. " -> " .. tostring(status.target))
-                            or messages[status.reason] or "Auto Punch: waiting"
-                    end,
                     isSkillAllowed = function()
                         if (AutoBR_Active or AutoBRExtreme_Active) and OneShot_Active then
                             return BossRushRecovery ~= nil and BossRushRecovery:CanUseSkills()
@@ -5225,6 +5156,8 @@ end
                     end,
                     isOtherFarmActive = function()
                         return otherMovementFarmActive() or (ThorFarmController and ThorFarmController:IsEnabled())
+                            or (DullahanFarmController and DullahanFarmController:IsEnabled())
+                            or (EventBossFarmController and EventBossFarmController:IsEnabled())
                     end,
                     onEnabledChanged = function(state, reason)
                         if not state and nearSwitch then nearSwitch:Set(false) end
@@ -5261,16 +5194,51 @@ end
                     Combat = nearController,
                     firePrompt = fireproximityprompt,
                     warn = warn,
-                    isOtherFarmActive = otherMovementFarmActive,
-                    onEnabledChanged = function(state, reason)
-                        if not state and thorSwitch then thorSwitch:Set(false) end
-                        if reason then notifyNearFarm(reason) end
+                    getAssignedBoss = function()
+                        return EventBossFarmController and EventBossFarmController:GetAssignedBoss("Thor")
                     end,
-                    onStatusChanged = function(status)
-                        if thorStatusLabel then thorStatusLabel.Text = "Thor: " .. status.detail end
+                    isOtherFarmActive = function()
+                        return otherMovementFarmActive() or (DullahanFarmController and DullahanFarmController:IsEnabled())
+                    end,
+                    onEnabledChanged = function(state, reason)
+                        if EventBossFarmController then EventBossFarmController:OnChildChanged("Thor", state, reason) end
                     end,
                 })
                 nearController.thorController = ThorFarmController
+                DullahanFarmController = createDullahanFarmController({
+                    Players = Players,
+                    LocalPlayer = LocalPlayer,
+                    Workspace = workspace,
+                    RunService = RunService,
+                    Combat = nearController,
+                    warn = warn,
+                    getAssignedBoss = function()
+                        return EventBossFarmController and EventBossFarmController:GetAssignedBoss("Dullahan")
+                    end,
+                    isOtherFarmActive = function()
+                        return otherMovementFarmActive() or ThorFarmController:IsEnabled()
+                    end,
+                    onEnabledChanged = function(state, reason)
+                        if EventBossFarmController then EventBossFarmController:OnChildChanged("Dullahan", state, reason) end
+                    end,
+                })
+                nearController.dullahanController = DullahanFarmController
+                EventBossFarmController = createEventBossFarmController({
+                    Players = Players,
+                    LocalPlayer = LocalPlayer,
+                    Workspace = workspace,
+                    RunService = RunService,
+                    Combat = nearController,
+                    Thor = ThorFarmController,
+                    Dullahan = DullahanFarmController,
+                    isOtherFarmActive = otherMovementFarmActive,
+                    warn = warn,
+                    onEnabledChanged = function(state, reason)
+                        if not state and eventBossSwitch then eventBossSwitch:Set(false) end
+                        if reason then notifyNearFarm(reason) end
+                    end,
+                })
+                nearController.eventBossController = EventBossFarmController
                 runtime.__SigmaAutoFarmNear = nearController
                 if window.main_frame and typeof(window.main_frame) == "Instance" then
                     nearController.uiConnection = window.main_frame.Destroying:Connect(function()
@@ -5279,59 +5247,47 @@ end
                     end)
                 end
                 
-                thorSwitch = autoFarmTab:AddSwitch("Auto Farm Thor Boss", function(state)
-                    ThorFarmController:SetEnabled(state)
+                addCompactDropdown(autoFarmTab, "Event Boss", "Thor", { "Thor", "Dullahan", "All" }, function(value)
+                    EventBossFarmController:SetMode(value)
                 end)
-                thorSwitch:Set(false)
-                thorStatusLabel = autoFarmTab:AddLabel("Thor: Off")
-                thorStatusLabel.Size = UDim2.new(1, 0, 0, 36)
-                thorStatusLabel.TextWrapped = true
-                thorStatusLabel.TextSize = 12
-                thorStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+                eventBossSwitch = autoFarmTab:AddSwitch("Auto Event Boss Farm", function(state)
+                    EventBossFarmController:SetEnabled(state)
+                end)
+                eventBossSwitch:Set(false)
                 
-                nearSwitch = autoFarmTab:AddSwitch("Auto Farm Near NPC", function(state)
+                nearSwitch = autoFarmTab:AddSwitch("Auto Farm Near", function(state)
                     nearController:SetEnabled(state)
                 end)
                 nearSwitch:Set(false)
                 
-                local nearPositionDropdown = autoFarmTab:AddDropdown("Near Farm Method (Above/Below)", function(value)
+                addCompactDropdown(autoFarmTab, "Position", "Above/Below", { "Above/Below", "Front/Behind" }, function(value)
                     nearController:SetConfig("position", value)
                 end)
-                for _, position in ipairs({ "Above/Below", "Front/Behind" }) do
-                    nearPositionDropdown:Add(position)
-                end
                 
-                autoFarmTab:AddTextBox("Near Farm Distance (-20 to 20, default 20)", function(text)
+                local distanceInput = autoFarmTab:AddTextBox("Distance (-20 to 20)", function(text)
                     if not nearController:SetConfig("offset", text) then
-                        notifyNearFarm("Near Farm Distance: enter a number from -20 to 20.")
+                        notifyNearFarm("Distance: -20 to 20.")
                     end
-                end)
-                nearPunchSwitch = autoFarmTab:AddSwitch("Auto Punch Near (Independent)", function(state)
+                end, { clear = false })
+                distanceInput.Text = "20"
+                nearPunchSwitch = autoFarmTab:AddSwitch("Auto Punch", function(state)
                     nearController:SetAutoPunch(state)
                 end)
                 nearPunchSwitch:Set(false)
-                punchStatusLabel = autoFarmTab:AddLabel("Auto Punch: Off")
-                punchStatusLabel.Size = UDim2.new(1, 0, 0, 36)
-                punchStatusLabel.TextWrapped = true
-                punchStatusLabel.TextSize = 12
-                punchStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-                local nearPunchSpeed = autoFarmTab:AddDropdown("Auto Punch Speed (default 0.2)", function(value)
+                local punchSpeeds = {}
+                for index = 1, 10 do punchSpeeds[index] = string.format("%.1f", index / 10) end
+                addCompactDropdown(autoFarmTab, "Punch Speed", "0.2", punchSpeeds, function(value)
                     nearController:SetConfig("punchSpeed", value)
                 end)
-                for index = 1, 10 do nearPunchSpeed:Add(string.format("%.1f", index / 10)) end
-                local nearPunchType = autoFarmTab:AddDropdown("Auto Punch Type (Normal)", function(value)
+                addCompactDropdown(autoFarmTab, "Punch Type", "Normal", { "Normal", "Slam" }, function(value)
                     nearController:SetConfig("punchType", value)
                 end)
-                nearPunchType:Add("Normal")
-                nearPunchType:Add("Slam")
-                local nearSkillDropdown = autoFarmTab:AddDropdown("Select Skills (click to toggle)", function(name)
-                    if nearController:ToggleSkill(name) then
-                        local selected = nearController:GetSelectedSkills()
-                        notifyNearFarm(#selected > 0 and "Selected: " .. table.concat(selected, ", ") or "Select Skills")
-                    end
+                addCompactDropdown(autoFarmTab, "Skills", "-", { "Z", "X", "C", "V", "B", "N", "G", "J" }, function(name)
+                    nearController:ToggleSkill(name)
+                    local selected = nearController:GetSelectedSkills()
+                    return #selected > 0 and table.concat(selected, " ") or "-"
                 end)
-                for _, name in ipairs({ "Z", "X", "C", "V", "B", "N", "G", "J" }) do nearSkillDropdown:Add(name) end
-                autoSkillSwitch = autoFarmTab:AddSwitch("Auto Skill (Lazy Hub)", function(state)
+                autoSkillSwitch = autoFarmTab:AddSwitch("Auto Skill", function(state)
                     nearController:SetAutoSkill(state)
                 end)
                 autoSkillSwitch:Set(false)
@@ -5339,11 +5295,11 @@ end
                 
             end
 
-            autoFarmTab:AddSwitch("One Shot Kill", function(state)
+            autoFarmTab:AddSwitch("One Shot", function(state)
                 OneShotMode(state)
             end):Set(false)
 
-                        autoFarmTab:AddSwitch("Auto Level Farm use with one shot", function(state)
+                        autoFarmTab:AddSwitch("Auto Level (One Shot)", function(state)
             AutoLevel(state)
         end):Set(false)
 
@@ -5351,19 +5307,11 @@ end
                 AutoIsland(state)
             end):Set(false)
 
-    local islandSpeedDropdown = autoFarmTab:AddDropdown("Auto Island Farm Mode", function(value)
+    addCompactDropdown(autoFarmTab, "Island Mode", AutoIsland_Mode, { "Fast", "Slow" }, function(value)
         AutoIsland_Mode = value
-        if value == "Fast" then
-            library:ShowNotification("Auto Island Fast Mode Select")
-        elseif value == "Slow" then
-            library:ShowNotification("Auto Island Slow Mode Select")
-        end
     end)
 
-    islandSpeedDropdown:Add("Fast")
-    islandSpeedDropdown:Add("Slow")
-
-    autoFarmTab:AddSwitch("Auto Imagination Farm", function(state)
+    autoFarmTab:AddSwitch("Auto Imagination", function(state)
     AutoShadow(state)
     end):Set(false)
 
@@ -5784,63 +5732,7 @@ end)
 SendNotification("Success", 5)
 end
 
---[[ Legacy Check key prompt removed.
-local function CreateCheckPartUI()
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "aaa"
-    screenGui.ResetOnSpawn = false
-    screenGui.Parent = game:GetService("CoreGui")
 
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 250, 0, 100)
-    frame.Position = UDim2.new(0.5, -125, 0.5, -50)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    frame.BorderSizePixel = 0
-    frame.Parent = screenGui
-
-    local uiCorner = Instance.new("UICorner")
-    uiCorner.CornerRadius = UDim.new(0, 6)
-    uiCorner.Parent = frame
-
-    local titleLabel = Instance.new("TextLabel")
-    titleLabel.Size = UDim2.new(0, 230, 0, 30)
-    titleLabel.Position = UDim2.new(0.5, -115, 0.2, -15)
-    titleLabel.BackgroundTransparency = 1
-    titleLabel.Text = "Check Verify"
-    titleLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    titleLabel.Font = Enum.Font.Gotham
-    titleLabel.TextSize = 16
-    titleLabel.Parent = frame
-
-    local checkButton = Instance.new("TextButton")
-    checkButton.Size = UDim2.new(0, 120, 0, 40)
-    checkButton.Position = UDim2.new(0.5, -60, 0.7, -20)
-    checkButton.Text = "Check key"
-    checkButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-    checkButton.TextColor3 = Color3.fromRGB(200, 200, 200)
-    checkButton.Font = Enum.Font.Gotham
-    checkButton.TextSize = 14
-    checkButton.Parent = frame
-
-    local uiCorner2 = Instance.new("UICorner")
-    uiCorner2.CornerRadius = UDim.new(0, 6)
-    uiCorner2.Parent = checkButton
-
-    checkButton.MouseButton1Click:Connect(function()
-        local sigmaPart = workspace:FindFirstChild("bazaao")
-        
-        if sigmaPart then
-            frame:Destroy()
-            screenGui:Destroy()
-            RunMainScript()
-        else
-            checkButton.Text = "Did you execute key?"
-            wait(1)
-            checkButton.Text = "Check key"
-        end
-    end)
-end
-]]--
 
 local function InitializeSystem()
     RunMainScript()
