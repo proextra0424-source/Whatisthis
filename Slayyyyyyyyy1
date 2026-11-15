@@ -439,19 +439,6 @@ end
 
             window.main_frame = window.main_frame or windowFrame
 
-            spawn(function()
-                while window.main_frame and window.main_frame.Parent do
-                    local t = tick()
-                    window.main_frame.Position = UDim2.new(
-                        window.main_frame.Position.X.Scale,
-                        window.main_frame.Position.X.Offset,
-                        window.main_frame.Position.Y.Scale + math.sin(t * 1.5) * 0.002,
-                        window.main_frame.Position.Y.Offset
-                    )
-                    RunService.RenderStepped:Wait()
-                end
-            end)
-
 
             local autoFarmTab, autoFarmFrame = window:AddTab("Auto Farm")
             local RiskyTab = window:AddTab("Risky/OP")
@@ -4070,7 +4057,7 @@ end
                         local function running()
                             return enabled and not destroyed and config.autoPunch and attackRunId == runId
                         end
-                        -- Match Lazy Hub's Auto Punch: frame wait, direct children, then 1..5 per target.
+                        -- Keep the scan/cadence, but use Project Baki's working Imagination combat packet.
                         while running() do
                             taskApi.wait()
                             if not running() then return end
@@ -4093,8 +4080,8 @@ end
                                                     -- Cancel old work on stop/respawn instead of leaking a combo.
                                                     if not running() or localPlayer.Character ~= currentCharacter then return end
                                                     remote:FireServer(
-                                                        "Light Punch", combo, humanoid,
-                                                        math.huge, math.huge, config.punchType ~= "Normal"
+                                                        "Light Punchy", combo, humanoid,
+                                                        nil, nil, config.punchType ~= "Normal", false
                                                     )
                                                     taskApi.wait(config.punchSpeed)
                                                 end
@@ -4140,6 +4127,10 @@ end
                         releaseSkillKey()
                     end
                 
+                    local function skillAllowed()
+                        return not deps.isSkillAllowed or deps.isSkillAllowed() == true
+                    end
+                
                     local function startSkill()
                         if skillTask or not skillEnabled or destroyed then return end
                         skillRunId = skillRunId + 1
@@ -4149,10 +4140,12 @@ end
                                 while skillEnabled and not destroyed and skillRunId == runId do
                                     taskApi.wait(0.4)
                                     if not skillEnabled or destroyed or skillRunId ~= runId then return end
-                                    if localCharacter() then
+                                    if localCharacter() and skillAllowed() then
                                         -- Same selection order and down/up timing as Lazy Hub Auto Skill.
                                         for _, name in ipairs(selectedSkills) do
                                             if not skillEnabled or destroyed or skillRunId ~= runId then return end
+                                            -- Recheck between selected keys: a recovered NPC can disappear mid-cycle.
+                                            if not localCharacter() or not skillAllowed() then break end
                                             local key = Enum.KeyCode[name]
                                             if key then
                                                 heldSkillKey = key
@@ -4518,6 +4511,16 @@ end
                 
                     function controller:GetTarget() return locked and locked.model or nil end
                     function controller:IsHovering() return hover ~= nil end
+                    function controller:CanUseSkills()
+                        if destroyed or not locked or not hover or not gatesOpen() or clock() < pauseUntil then return false end
+                        if deps.isArenaReady and not deps.isArenaReady() then return false end
+                        local character, humanoid, root = localParts()
+                        if character ~= hover.character or humanoid ~= hover.humanoid or root ~= hover.root then return false end
+                        if hover.position.Parent ~= root or hover.orientation.Parent ~= root then return false end
+                        local model, targetRoot = npcParts(locked.humanoid, folder())
+                        return model == locked.model and targetRoot == locked.root
+                            and locked.humanoid.Health <= 0 and clock() - locked.zeroSince >= 10
+                    end
                     function controller:Destroy()
                         if destroyed then return end
                         destroyed = true
@@ -4558,6 +4561,12 @@ end
                     VirtualInputManager = VirtualInputManager,
                     Game = game,
                     warn = warn,
+                    isSkillAllowed = function()
+                        if (AutoBR_Active or AutoBRExtreme_Active) and OneShot_Active then
+                            return BossRushRecovery ~= nil and BossRushRecovery:CanUseSkills()
+                        end
+                        return true
+                    end,
                     isOtherFarmActive = function()
                         return AutoIsland_Active or AutoBR_Active or AutoBRPunch_Active
                             or AutoBRExtreme_Active or AutoShadow_Active
@@ -4616,7 +4625,7 @@ end
                         notifyNearFarm("Near Farm Distance: enter a number from -20 to 20.")
                     end
                 end)
-                autoFarmTab:AddSwitch("Near Auto Punch (Lazy Hub)", function(state)
+                autoFarmTab:AddSwitch("Near Auto Punch (Project Baki)", function(state)
                     nearController:SetConfig("autoPunch", state)
                 end):Set(true)
                 local nearPunchSpeed = autoFarmTab:AddDropdown("Near Punch Speed (default 0.2)", function(value)
