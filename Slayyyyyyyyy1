@@ -429,7 +429,7 @@ end
                 danger = Color3.fromRGB(200, 0, 0)
             }
 
-            local window = library:AddWindow("Project Baki 4 | SIGMA PREMIUM", {
+            local window, windowFrame = library:AddWindow("Project Baki 4 | SIGMA PREMIUM", {
                 main_color = theme.main,
                 min_size = Vector2.new(330, 450),
                 max_size = Vector2.new(440, 650),
@@ -437,8 +437,10 @@ end
                 can_resize = true
             })
 
+            window.main_frame = window.main_frame or windowFrame
+
             spawn(function()
-                while true do
+                while window.main_frame and window.main_frame.Parent do
                     local t = tick()
                     window.main_frame.Position = UDim2.new(
                         window.main_frame.Position.X.Scale,
@@ -451,7 +453,7 @@ end
             end)
 
 
-            local autoFarmTab = window:AddTab("Auto Farm")
+            local autoFarmTab, autoFarmFrame = window:AddTab("Auto Farm")
             local RiskyTab = window:AddTab("Risky/OP")
             local teleportTab = window:AddTab("Tp/Shop")
             local pvpTab = window:AddTab("Kill")
@@ -568,121 +570,6 @@ end
             end
             
             
-            local AutoKokushibo_Active = false
-        local AutoKokushibo_Speed = 0.1
-        local countpunch = 0
-
-        local function AutoKokushiboRisky(state)
-            AutoKokushibo_Active = state
-            
-            if not AutoKokushibo_Active then
-                local character = LocalPlayer.Character
-                if character and character:FindFirstChild("HumanoidRootPart") then
-                    character.HumanoidRootPart.Anchored = false
-                end
-                return
-            end
-            
-            local trainerValue = LocalPlayer.Data.Trainer.Value
-            if trainerValue ~= "SquidyCakez" then
-                local args = {"SquidyCakez"}
-                game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("ClientToServer"):WaitForChild("Quest"):InvokeServer(unpack(args))
-                LocalPlayer.CharacterAdded:Wait()
-                wait(3)
-            end
-            
-            local function waitForHRP()
-                local char = LocalPlayer.Character
-                if not char then
-                    char = LocalPlayer.CharacterAdded:Wait()
-                end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                while not hrp and AutoKokushibo_Active do
-                    char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-                    hrp = char:FindFirstChild("HumanoidRootPart")
-                    wait(0.1)
-                end
-                return char, hrp
-            end
-            
-            local function attackKokushibo()
-                while AutoKokushibo_Active do
-                    local kokushibo = workspace.Game.Players:FindFirstChild("Kokushibo")
-                    
-                    if not kokushibo then
-                        local character, hrp = waitForHRP()
-                        if hrp then
-                            hrp.Anchored = false
-                        end
-                        break
-                    end
-                    
-                    local humanoid = kokushibo:FindFirstChild("Humanoid")
-                    local rootPart = kokushibo:FindFirstChild("HumanoidRootPart")
-                    
-                    if not humanoid or not rootPart or humanoid.Health <= 0 then
-                        break
-                    end
-                    
-                    local maxHealth = humanoid.MaxHealth
-                    local currentHealth = humanoid.Health
-                    local healthPercentage = (currentHealth / maxHealth) * 100
-                    
-                    if healthPercentage < 70 then
-                        humanoid.Health = 0
-                        break
-                    end
-                    
-                    local character, hrp = waitForHRP()
-                    if not hrp then break end
-                    
-                    local targetCFrame = rootPart.CFrame * CFrame.new(0, 0, 15)
-                    hrp.CFrame = targetCFrame
-                    hrp.Anchored = false
-                    
-                    local args = {
-                        "Light Punchy",
-                        countpunch,
-                        humanoid,
-                        [6] = false,
-                        [7] = false
-                    }
-                    
-                    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("ClientToServer"):WaitForChild("BasicCombat"):FireServer(unpack(args))
-                    
-                    countpunch = countpunch + 1
-                    if countpunch > 5 then
-                        countpunch = 0
-                        wait(1)
-                    else
-                        wait(AutoKokushibo_Speed)
-                    end
-                end
-            end
-            
-            spawn(function()
-                while AutoKokushibo_Active do
-                    local kokushibo = workspace.Game.Players:FindFirstChild("Kokushibo")
-                    
-                    if kokushibo then
-                        attackKokushibo()
-                    else
-                        local character, hrp = waitForHRP()
-                        if hrp then
-                            hrp.Anchored = false
-                        end
-                    end
-                    
-                    wait(1)
-                end
-                
-                local character, hrp = waitForHRP()
-                if hrp then
-                    hrp.Anchored = false
-                end
-            end)
-        end
-
             local AutoShadow_Active = false
 
         local function AutoShadowRisky(state)
@@ -909,112 +796,6 @@ game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("Clien
         end
     end)
 end
-
-        local AutoKokushibo_Active = false
-        local AutoKokushibo_Speed = 0.1
-        local countpunch = 0
-
-        local function AutoKokushibo(state)
-            AutoKokushibo_Active = state
-            
-            if not AutoKokushibo_Active then
-                local character = LocalPlayer.Character
-                if character and character:FindFirstChild("HumanoidRootPart") then
-                    character.HumanoidRootPart.Anchored = false
-                end
-                return
-            end
-            
-            local trainerValue = LocalPlayer.Data.Trainer.Value
-            if trainerValue ~= "SquidyCakez" then
-                local args = {"SquidyCakez"}
-                game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("ClientToServer"):WaitForChild("Quest"):InvokeServer(unpack(args))
-                LocalPlayer.CharacterAdded:Wait()
-                wait(3)
-            end
-            
-            local function waitForHRP()
-                local char = LocalPlayer.Character
-                if not char then
-                    char = LocalPlayer.CharacterAdded:Wait()
-                end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                while not hrp and AutoKokushibo_Active do
-                    char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-                    hrp = char:FindFirstChild("HumanoidRootPart")
-                    wait(0.1)
-                end
-                return char, hrp
-            end
-            
-            local function attackKokushibo()
-                while AutoKokushibo_Active do
-                    local kokushibo = workspace.Game.Players:FindFirstChild("Kokushibo")
-                    
-                    if not kokushibo then
-                        local character, hrp = waitForHRP()
-                        if hrp then
-                            hrp.Anchored = false
-                        end
-                        break
-                    end
-                    
-                    local humanoid = kokushibo:FindFirstChild("Humanoid")
-                    local rootPart = kokushibo:FindFirstChild("HumanoidRootPart")
-                    
-                    if not humanoid or not rootPart or humanoid.Health <= 0 then
-                        break
-                    end
-                    
-                    local character, hrp = waitForHRP()
-                    if not hrp then break end
-                    
-                    local targetCFrame = rootPart.CFrame * CFrame.new(0, 0, 15)
-                    hrp.CFrame = targetCFrame
-                    hrp.Anchored = false
-                    
-                    local args = {
-                        "Light Punchy",
-                        countpunch,
-                        humanoid,
-                        [6] = false,
-                        [7] = false
-                    }
-                    
-                    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("ClientToServer"):WaitForChild("BasicCombat"):FireServer(unpack(args))
-                    
-                    countpunch = countpunch + 1
-                    if countpunch > 5 then
-                        countpunch = 0
-                        wait(1)
-                    else
-                        wait(AutoKokushibo_Speed)
-                    end
-                end
-            end
-            
-            spawn(function()
-                while AutoKokushibo_Active do
-                    local kokushibo = workspace.Game.Players:FindFirstChild("Kokushibo")
-                    
-                    if kokushibo then
-                        attackKokushibo()
-                    else
-                        local character, hrp = waitForHRP()
-                        if hrp then
-                            hrp.Anchored = false
-                        end
-                    end
-                    
-                    wait(1)
-                end
-                
-                local character, hrp = waitForHRP()
-                if hrp then
-                    hrp.Anchored = false
-                end
-            end)
-        end
 
         local AutoKrampus_Active = false
 local AutoKrampus_Speed = 0.1
@@ -4182,6 +3963,18 @@ end
                 TextXAlignment = Enum.TextXAlignment.Center
             })
 
+            autoFarmTab:AddSwitch("Auto Boss Rush", function(state)
+                AutoBR(state)
+            end):Set(false)
+
+            autoFarmTab:AddSwitch("Auto Boss Rush Punch", function(state)
+                AutoBRPunch(state)
+            end):Set(false)
+
+            autoFarmTab:AddSwitch("Auto Boss Rush Extreme", function(state)
+                AutoBRExtreme(state)
+            end):Set(false)
+
             do
                 -- Client controller for the existing Project Baki script.
                 -- Dependencies are injected so lifecycle/target selection can be tested offline.
@@ -4767,7 +4560,7 @@ end
                     warn = warn,
                     isOtherFarmActive = function()
                         return AutoIsland_Active or AutoBR_Active or AutoBRPunch_Active
-                            or AutoBRExtreme_Active or AutoKokushibo_Active or AutoShadow_Active
+                            or AutoBRExtreme_Active or AutoShadow_Active
                             or AutoIgnis_Active or AutoKrampus_Active or AutoLevel_Active
                             or AutoIslandbal_Active or AutoBalraxionTerminator_Active
                             or AutoRelic_Active or AutoSell_Active or AutoBazaarTokens_Active
@@ -4882,9 +4675,6 @@ end
     AutoIgnis(state)
     end):Set(false)]]
 
-    autoFarmTab:AddSwitch("Auto Kokushibo", function(state)
-    AutoKokushibo(state)
-    end):Set(false)
 
     --[[autoFarmTab:AddSwitch("Auto Balraxion + Terminator", function(state)
     AutoBalraxionTerminator(state)
@@ -4930,17 +4720,8 @@ balraxionModeDropdown:Add("Hard One Shot")
                 AutoUse(state)
             end):Set(false)
 
-            autoFarmTab:AddSwitch("Auto Boss Rush", function(state)
-                AutoBR(state)
-            end):Set(false)
 
-            autoFarmTab:AddSwitch("Auto Boss Rush Punch", function(state)
-                AutoBRPunch(state)
-            end):Set(false)
 
-            autoFarmTab:AddSwitch("Auto Boss Rush Extreme", function(state)
-                AutoBRExtreme(state)
-            end):Set(false)
 
             autoFarmTab:AddSwitch("Auto Collect Relics", function(state)
                 AutoRelic(state)
@@ -4966,15 +4747,7 @@ balraxionModeDropdown:Add("Hard One Shot")
                 AutoShadowRisky(state)
             end):Set(false)
 
-                        RiskyTab:AddLabel("Muzan....", {
-                TextSize = 18,
-                TextColor3 = theme.accent,
-                TextXAlignment = Enum.TextXAlignment.Center
-            })
 
-                    RiskyTab:AddSwitch("Auto Kokushibo (Risky Version)", function(state)
-                AutoKokushiboRisky(state)
-            end):Set(false)
 
                 RiskyTab:AddLabel("Give Bazaar Tokens not risky btw", {
                 TextSize = 18,
@@ -5161,6 +4934,49 @@ miscTab:AddSwitch("Auto island Pick", function(state)
                 TextColor3 = Color3.fromRGB(150, 150, 150),
                 TextXAlignment = Enum.TextXAlignment.Center
             })
+
+            do
+                -- Native scrolling keeps controls below the viewport reachable on mouse and touch.
+                local function enableAutoFarmScrolling(tabFrame)
+                    if not tabFrame then
+                        warn("Project Baki: Auto Farm tab frame is unavailable.")
+                        return nil
+                    end
+                
+                    local existing = tabFrame:FindFirstChild("AutoFarmScroll")
+                    if existing then return existing end
+                
+                    local scroll = Instance.new("ScrollingFrame")
+                    scroll.Name = "AutoFarmScroll"
+                    scroll.BackgroundTransparency = 1
+                    scroll.BorderSizePixel = 0
+                    scroll.Size = UDim2.fromScale(1, 1)
+                    scroll.Position = UDim2.fromOffset(0, 0)
+                    scroll.CanvasSize = UDim2.fromOffset(0, 0)
+                    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+                    scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+                    scroll.ScrollingEnabled = true
+                    scroll.ScrollBarThickness = 6
+                    scroll.ScrollBarImageColor3 = Color3.fromRGB(0, 170, 255)
+                    scroll.Active = true
+                    scroll.ClipsDescendants = true
+                    scroll.ZIndex = tabFrame.ZIndex
+                
+                    -- Preserve the existing layout, controls, dropdowns and their callbacks.
+                    for _, child in ipairs(tabFrame:GetChildren()) do
+                        child.Parent = scroll
+                    end
+                    local padding = Instance.new("UIPadding")
+                    padding.PaddingRight = UDim.new(0, 10)
+                    padding.PaddingBottom = UDim.new(0, 12)
+                    padding.Parent = scroll
+                    scroll.Parent = tabFrame
+                    return scroll
+                end
+                
+                
+                enableAutoFarmScrolling(autoFarmFrame)
+            end
 
     autoFarmTab:Show()
 
